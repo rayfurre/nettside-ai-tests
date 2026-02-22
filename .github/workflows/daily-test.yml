@@ -1,4 +1,4 @@
-# VERSION: 2.0
+# VERSION: 2.1
 name: Daglig E2E Test - Nettside.ai
 
 on:
@@ -106,10 +106,10 @@ jobs:
         if: always()
         run: |
           if [ "${{ steps.test.outcome }}" == "success" ]; then
-            echo "status=✅ BESTÅTT" >> $GITHUB_OUTPUT
+            echo "status=BESTATT" >> $GITHUB_OUTPUT
             echo "color=#22c55e" >> $GITHUB_OUTPUT
           else
-            echo "status=❌ FEILET" >> $GITHUB_OUTPUT
+            echo "status=FEILET" >> $GITHUB_OUTPUT
             echo "color=#ef4444" >> $GITHUB_OUTPUT
           fi
           echo "date=$(TZ='Europe/Oslo' date '+%d.%m.%Y kl %H:%M')" >> $GITHUB_OUTPUT

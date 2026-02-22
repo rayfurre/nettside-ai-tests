@@ -1,4 +1,4 @@
-# VERSION: 2.1
+# VERSION: 2.2
 name: Daglig E2E Test - Nettside.ai
 
 on:
@@ -105,7 +105,8 @@ jobs:
         id: email
         if: always()
         run: |
-          if [ "${{ steps.test.outcome }}" == "success" ]; then
+          FEILET_COUNT="${{ steps.parse.outputs.feilet }}"
+          if [ "$FEILET_COUNT" = "0" ] && [ "${{ steps.parse.outputs.ok }}" != "0" ]; then
             echo "status=BESTATT" >> $GITHUB_OUTPUT
             echo "color=#22c55e" >> $GITHUB_OUTPUT
           else

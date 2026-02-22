@@ -1,6 +1,6 @@
 // ===================================================
 // PLAYWRIGHT CONFIG: Nettside.ai E2E Testing
-// VERSION: 1.0
+// VERSION: 2.0 (utvidet timeout for editor + AI-tester)
 // ===================================================
 
 import { defineConfig, devices } from '@playwright/test';
@@ -27,9 +27,9 @@ export default defineConfig({
     timezoneId: 'Europe/Oslo',
   },
 
-  timeout: 180000, // 3 min per test (generering tar ~2 min)
+  timeout: 480000, // 8 min per test (generering ~2 min + editor ~3 min + AI-bilde ~2 min)
   expect: {
-    timeout: 150000, // 2.5 min for assertions
+    timeout: 150000,
   },
 
   projects: [

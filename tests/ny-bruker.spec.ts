@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 4.0 (komplett E2E inkl. editor-tester)
+// VERSION: 4.1 (komplett E2E inkl. editor-tester)
 // ===================================================
 
 import { test, expect, Page, BrowserContext } from '@playwright/test';
@@ -48,12 +48,20 @@ const IGNORED_DOMAINS = [
   'doubleclick.net',
 ];
 
+// Supabase-endepunkter som gir forventede "tomme" eller "for tidlige" responser
+const IGNORED_URL_PATTERNS = [
+  '/rest/v1/project_history',   // Skrives etter generering, tom før det
+  '/rest/v1/deployment_issues', // Tom liste = ingen problemer = forventet
+];
+
 // ===================================================
 // Hjelpefunksjoner
 // ===================================================
 
 function isIgnoredUrl(url: string): boolean {
-  return IGNORED_DOMAINS.some(domain => url.includes(domain));
+  if (IGNORED_DOMAINS.some(domain => url.includes(domain))) return true;
+  if (IGNORED_URL_PATTERNS.some(pattern => url.includes(pattern))) return true;
+  return false;
 }
 
 async function setupMonitoring(page: Page, logs: LogEntry[]): Promise<void> {

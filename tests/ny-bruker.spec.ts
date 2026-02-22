@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 6.4 (robust dialog-lukking, verifisering)
+// VERSION: 6.5 (ulike bilder per steg, dialog-lukking mellom steg)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -202,35 +202,40 @@ function getEditorIframe(page: Page): FrameLocator {
   return page.frameLocator(SEL.editorIframe);
 }
 
-async function openImageModal(page: Page): Promise<boolean> {
+async function openImageModal(page: Page, skipCount: number = 0): Promise<boolean> {
   try {
     const iframe = getEditorIframe(page);
 
     // Vent på at minst ett bilde er synlig i iframe
     await iframe.locator('img').first().waitFor({ state: 'visible', timeout: 10000 });
 
-    // Klikk første synlige bilde > 50px
     const allImages = await iframe.locator('img').all();
-    console.log(`   📷 Fant ${allImages.length} bilder i editor-iframe`);
+    console.log(`   📷 Fant ${allImages.length} bilder i editor-iframe (hopper over ${skipCount})`);
 
+    let skipped = 0;
     for (const img of allImages) {
       const visible = await img.isVisible().catch(() => false);
       if (!visible) continue;
 
-      // Sjekk størrelse via boundingBox (mer pålitelig enn naturalWidth i iframe)
       const box = await img.boundingBox().catch(() => null);
-      if (!box || box.width <= 50) continue;
+      if (!box || box.width <= 50 || box.height <= 50) continue;
 
-      console.log(`   📷 Klikker bilde: ${Math.round(box.width)}x${Math.round(box.height)}`);
+      // Hopp over de første N klikkbare bildene
+      if (skipped < skipCount) {
+        skipped++;
+        continue;
+      }
+
+      console.log(`   📷 Klikker bilde #${skipped + 1}: ${Math.round(box.width)}x${Math.round(box.height)}`);
       await img.click();
 
-      // Vent på modal i hovedsiden (ikke iframe)
+      // Vent på modal i hovedsiden
       try {
         await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 5000 });
         return true;
       } catch {
-        // Prøv neste bilde
         console.log('   ⚠️ Modal åpnet ikke, prøver neste bilde...');
+        skipped++;
         continue;
       }
     }
@@ -718,7 +723,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 10b: Klikk bilde i iframe → modal i hovedsiden
     stegStart = Date.now();
     try {
-      const modalOpened = await openImageModal(page);
+      const modalOpened = await openImageModal(page, 0);
       if (!modalOpened) throw new Error('Bilde-modal åpnet ikke');
       await page.screenshot({ path: 'test-results/steg10b-modal.png' }).catch(() => {});
       result.screenshots.push('steg10b-modal.png');
@@ -775,6 +780,10 @@ test.describe('Nettside.ai - Komplett test', () => {
     // STEG 11: Bilde - URL (Unsplash)
     // ========================================
 
+    // Lukk eventuelle åpne dialoger før neste bilde-test
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(500);
+
     const testBildeUrl = 'https://images.unsplash.com/photo-1581578731548-c64695cc6952?w=800&h=600&fit=crop';
 
     // 11a: Redigeringsmodus
@@ -797,7 +806,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 11b: Åpne bilde-modal
     stegStart = Date.now();
     try {
-      const modalOpened = await openImageModal(page);
+      const modalOpened = await openImageModal(page, 1);
       if (!modalOpened) throw new Error('Modal åpnet ikke');
       result.steg.push({ navn: 'Steg 11b: Åpne bilde-modal', status: 'OK', melding: 'Modal åpnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
@@ -863,6 +872,10 @@ test.describe('Nettside.ai - Komplett test', () => {
     // STEG 12: Bilde - AI
     // ========================================
 
+    // Lukk eventuelle åpne dialoger før neste bilde-test
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(500);
+
     // 12a: Redigeringsmodus
     stegStart = Date.now();
     try {
@@ -883,7 +896,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 12b: Åpne bilde-modal
     stegStart = Date.now();
     try {
-      const modalOpened = await openImageModal(page);
+      const modalOpened = await openImageModal(page, 2);
       if (!modalOpened) throw new Error('Modal åpnet ikke');
       result.steg.push({ navn: 'Steg 12b: Åpne bilde-modal', status: 'OK', melding: 'Modal åpnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {

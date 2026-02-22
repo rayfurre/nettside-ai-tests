@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 6.2 (lukk kladd-dialog, vent på EDITOR_READY)
+// VERSION: 6.3 (bedre openImageModal, vent på preview/bilder ved re-enter)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -205,21 +205,40 @@ function getEditorIframe(page: Page): FrameLocator {
 async function openImageModal(page: Page): Promise<boolean> {
   try {
     const iframe = getEditorIframe(page);
-    // Klikk på et bilde inne i editor-iframen
+
+    // Vent på at minst ett bilde er synlig i iframe
+    await iframe.locator('img').first().waitFor({ state: 'visible', timeout: 10000 });
+
+    // Klikk første synlige bilde > 50px
     const allImages = await iframe.locator('img').all();
+    console.log(`   📷 Fant ${allImages.length} bilder i editor-iframe`);
+
     for (const img of allImages) {
       const visible = await img.isVisible().catch(() => false);
       if (!visible) continue;
-      const width = await img.evaluate((el: HTMLImageElement) => el.naturalWidth).catch(() => 0);
-      if (width <= 50) continue;
+
+      // Sjekk størrelse via boundingBox (mer pålitelig enn naturalWidth i iframe)
+      const box = await img.boundingBox().catch(() => null);
+      if (!box || box.width <= 50) continue;
+
+      console.log(`   📷 Klikker bilde: ${Math.round(box.width)}x${Math.round(box.height)}`);
       await img.click();
-      await page.waitForTimeout(2000);
-      // Modal åpnes i hovedsiden via postMessage
-      const modalOpen = await page.locator(SEL.imageDialog).isVisible().catch(() => false);
-      if (modalOpen) return true;
+
+      // Vent på modal i hovedsiden (ikke iframe)
+      try {
+        await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 5000 });
+        return true;
+      } catch {
+        // Prøv neste bilde
+        console.log('   ⚠️ Modal åpnet ikke, prøver neste bilde...');
+        continue;
+      }
     }
+
+    console.log('   ❌ Ingen bilder åpnet modalen');
     return false;
-  } catch {
+  } catch (error) {
+    console.log(`   ❌ openImageModal feil: ${error}`);
     return false;
   }
 }
@@ -649,9 +668,13 @@ test.describe('Nettside.ai - Komplett test', () => {
     try {
       const alreadyEditing = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
       if (!alreadyEditing) {
+        // Etter lagring → normalvisning. Vent på preview, så enter edit igjen
+        await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 10000 }).catch(() => {});
         editModeActive = await enterEditMode(page);
         if (!editModeActive) throw new Error('Kunne ikke aktivere redigeringsmodus');
       }
+      // Ekstra vent for at bilder i iframe skal laste
+      await page.waitForTimeout(3000);
       result.steg.push({ navn: 'Steg 10a: Redigeringsmodus (upload)', status: 'OK', melding: 'Aktivert', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg10a-feil.png' }).catch(() => {});
@@ -726,9 +749,11 @@ test.describe('Nettside.ai - Komplett test', () => {
     try {
       const alreadyEditing = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
       if (!alreadyEditing) {
+        await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 10000 }).catch(() => {});
         const ok = await enterEditMode(page);
         if (!ok) throw new Error('Kunne ikke aktivere redigeringsmodus');
       }
+      await page.waitForTimeout(3000);
       result.steg.push({ navn: 'Steg 11a: Redigeringsmodus (URL)', status: 'OK', melding: 'Aktivert', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg11a-feil.png' }).catch(() => {});
@@ -810,9 +835,11 @@ test.describe('Nettside.ai - Komplett test', () => {
     try {
       const alreadyEditing = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
       if (!alreadyEditing) {
+        await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 10000 }).catch(() => {});
         const ok = await enterEditMode(page);
         if (!ok) throw new Error('Kunne ikke aktivere redigeringsmodus');
       }
+      await page.waitForTimeout(3000);
       result.steg.push({ navn: 'Steg 12a: Redigeringsmodus (AI)', status: 'OK', melding: 'Aktivert', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg12a-feil.png' }).catch(() => {});

@@ -326,7 +326,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     // ========================================
-    // STEG 5: Vent på generering (~2 min)
+    // STEG 5: Vent på generering (~3 min)
     // ========================================
     stegStart = Date.now();
     let genereringFullfort = false;
@@ -335,30 +335,33 @@ test.describe('Nettside.ai - Komplett test', () => {
         await collectToasts(page, logs).catch(() => {});
       }, 5000);
       
-      const previewSelectors = [
-        'iframe[src*="netlify"]',
-        'iframe[src*="preview"]',
-        '[data-testid="preview"]',
-        'iframe'
-      ];
-      
-      const maxWait = 150000; // 2.5 min
+      // Vent på at Kladd-knappen blir synlig (indikerer ferdig generering)
+      const maxWait = 180000; // 3 min
       const pollInterval = 3000;
       let elapsed = 0;
       
       while (!genereringFullfort && elapsed < maxWait) {
-        for (const selector of previewSelectors) {
-          const isVisible = await page.locator(selector).first().isVisible().catch(() => false);
-          if (isVisible) {
+        // Sjekk om Kladd-knappen er synlig
+        const kladdVisible = await page.locator('button:has-text("Kladd")').first().isVisible().catch(() => false);
+        if (kladdVisible) {
+          genereringFullfort = true;
+          break;
+        }
+        
+        // Alternativt: sjekk om forhåndsvisning er synlig
+        const previewVisible = await page.locator('iframe').first().isVisible().catch(() => false);
+        if (previewVisible) {
+          // Gi litt ekstra tid for at knapper skal lastes
+          await page.waitForTimeout(3000);
+          const kladdNow = await page.locator('button:has-text("Kladd")').first().isVisible().catch(() => false);
+          if (kladdNow) {
             genereringFullfort = true;
             break;
           }
         }
         
-        if (!genereringFullfort) {
-          await page.waitForTimeout(pollInterval);
-          elapsed += pollInterval;
-        }
+        await page.waitForTimeout(pollInterval);
+        elapsed += pollInterval;
       }
       
       clearInterval(toastInterval);
@@ -368,8 +371,8 @@ test.describe('Nettside.ai - Komplett test', () => {
         navn: 'Steg 5: Vent på generering',
         status: genereringFullfort ? 'OK' : 'FEILET',
         melding: genereringFullfort 
-          ? `Forhåndsvisning synlig etter ${Math.round((Date.now() - stegStart) / 1000)}s`
-          : `Timeout etter ${Math.round(maxWait / 1000)}s - ingen forhåndsvisning`,
+          ? `Generering fullført etter ${Math.round((Date.now() - stegStart) / 1000)}s`
+          : `Timeout etter ${Math.round(maxWait / 1000)}s - Kladd-knapp ikke synlig`,
         tidBrukt: Date.now() - stegStart
       });
       
@@ -397,18 +400,38 @@ test.describe('Nettside.ai - Komplett test', () => {
     stegStart = Date.now();
     let kladdKlikket = false;
     try {
-      const kladdButton = page.getByRole('button', { name: /kladd/i });
-      await expect(kladdButton).toBeVisible({ timeout: 10000 });
-      await kladdButton.click();
-      kladdKlikket = true;
-      await collectToasts(page, logs);
+      // Prøv flere selektorer for Kladd-knappen
+      const kladdSelectors = [
+        'button:has-text("Kladd")',
+        'button:has(span:text("Kladd"))',
+        '[data-testid*="kladd"]',
+        'button >> text=Kladd'
+      ];
       
-      result.steg.push({
-        navn: 'Steg 6: Klikk Kladd-knappen',
-        status: 'OK',
-        melding: 'Kladd-knapp klikket',
-        tidBrukt: Date.now() - stegStart
-      });
+      let kladdButton = null;
+      for (const selector of kladdSelectors) {
+        const btn = page.locator(selector).first();
+        const isVisible = await btn.isVisible().catch(() => false);
+        if (isVisible) {
+          kladdButton = btn;
+          break;
+        }
+      }
+      
+      if (kladdButton) {
+        await kladdButton.click();
+        kladdKlikket = true;
+        await collectToasts(page, logs);
+        
+        result.steg.push({
+          navn: 'Steg 6: Klikk Kladd-knappen',
+          status: 'OK',
+          melding: 'Kladd-knapp klikket',
+          tidBrukt: Date.now() - stegStart
+        });
+      } else {
+        throw new Error('Kladd-knapp ikke funnet med noen av selektorene');
+      }
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg6-feil.png' }).catch(() => {});
       result.screenshots.push('steg6-feil.png');

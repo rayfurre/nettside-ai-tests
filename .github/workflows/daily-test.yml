@@ -1,220 +1,222 @@
-name: Daglig E2E Test - Nettside.ai
-
-on:
-  schedule:
-    - cron: '0 7 * * *'  # 08:00 norsk tid (07:00 UTC)
-  workflow_dispatch:      # Manuell kjøring
-
-jobs:
-  test:
-    name: E2E Test - Komplett flyt
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
-
-      - name: Run Playwright tests
-        id: test
-        run: npx playwright test 2>&1 | tee test-output.log
-        continue-on-error: true
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results
-          path: |
-            test-results/
-            playwright-report/
-          retention-days: 30
-
-      - name: Parse test results
-        id: parse
-        if: always()
-        run: |
-          if [ -f "test-results/rapport.json" ]; then
-            BEDRIFT=$(jq -r '.bedrift' test-results/rapport.json)
-            EPOST=$(jq -r '.epost' test-results/rapport.json)
-            KLADD_URL=$(jq -r '.kladdUrl // "Ikke generert"' test-results/rapport.json)
-            
-            OK=$(jq '[.steg[] | select(.status == "OK")] | length' test-results/rapport.json)
-            FEILET=$(jq '[.steg[] | select(.status == "FEILET")] | length' test-results/rapport.json)
-            
-            FEIL=$(jq -r '[.steg[] | select(.status == "FEILET") | "❌ \(.navn): \(.melding)"] | join("<br>")' test-results/rapport.json)
-            TOASTS=$(jq -r '[.logs[] | select(.type == "toast") | "💬 \(.message)"] | join("<br>")' test-results/rapport.json)
-            NETWORK=$(jq -r '[.logs[] | select(.type == "network") | "🌐 \(.message)"] | join("<br>")' test-results/rapport.json)
-            ERRORS=$(jq -r '[.logs[] | select(.type == "error") | "⚠️ \(.message)"] | join("<br>")' test-results/rapport.json)
-            
-            echo "bedrift=$BEDRIFT" >> $GITHUB_OUTPUT
-            echo "epost=$EPOST" >> $GITHUB_OUTPUT
-            echo "kladd_url=$KLADD_URL" >> $GITHUB_OUTPUT
-            echo "ok=$OK" >> $GITHUB_OUTPUT
-            echo "feilet=$FEILET" >> $GITHUB_OUTPUT
-            
-            {
-              echo "feil<<EOF"
-              echo "$FEIL"
-              echo "EOF"
-            } >> $GITHUB_OUTPUT
-            
-            {
-              echo "toasts<<EOF"
-              echo "$TOASTS"
-              echo "EOF"
-            } >> $GITHUB_OUTPUT
-            
-            {
-              echo "network<<EOF"
-              echo "$NETWORK"
-              echo "EOF"
-            } >> $GITHUB_OUTPUT
-            
-            {
-              echo "errors<<EOF"
-              echo "$ERRORS"
-              echo "EOF"
-            } >> $GITHUB_OUTPUT
-          else
-            echo "bedrift=Ukjent" >> $GITHUB_OUTPUT
-            echo "epost=Ukjent" >> $GITHUB_OUTPUT
-            echo "kladd_url=Ikke generert" >> $GITHUB_OUTPUT
-            echo "ok=0" >> $GITHUB_OUTPUT
-            echo "feilet=0" >> $GITHUB_OUTPUT
-            echo "feil=Ingen rapport generert" >> $GITHUB_OUTPUT
-            echo "toasts=" >> $GITHUB_OUTPUT
-            echo "network=" >> $GITHUB_OUTPUT
-            echo "errors=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Prepare email content
-        id: email
-        if: always()
-        run: |
-          if [ "${{ steps.test.outcome }}" == "success" ]; then
-            echo "status=✅ BESTÅTT" >> $GITHUB_OUTPUT
-            echo "color=#22c55e" >> $GITHUB_OUTPUT
-          else
-            echo "status=❌ FEILET" >> $GITHUB_OUTPUT
-            echo "color=#ef4444" >> $GITHUB_OUTPUT
-          fi
-          echo "date=$(TZ='Europe/Oslo' date '+%d.%m.%Y kl %H:%M')" >> $GITHUB_OUTPUT
-
-      - name: Send email via Resend
-        if: always()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.resend.com
-          server_port: 465
-          secure: true
-          username: resend
-          password: ${{ secrets.RESEND_API_KEY }}
-          subject: "${{ steps.email.outputs.status }} - Nettside.ai test (${{ steps.email.outputs.date }})"
-          to: kundesenter@nettside.ai
-          from: Nettside.ai Test <test@nettside.ai>
-          html_body: |
-            <!DOCTYPE html>
-            <html>
-            <head>
-              <style>
-                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; background: #f1f5f9; }
-                .container { max-width: 600px; margin: 0 auto; }
-                .header { background: ${{ steps.email.outputs.color }}; color: white; padding: 24px; border-radius: 12px 12px 0 0; }
-                .header h1 { margin: 0; font-size: 24px; }
-                .header p { margin: 8px 0 0 0; opacity: 0.9; }
-                .content { background: white; padding: 24px; border-radius: 0 0 12px 12px; }
-                .section { margin-bottom: 20px; }
-                .section-title { font-weight: 600; color: #334155; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; }
-                .info-row { display: flex; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
-                .info-label { color: #64748b; width: 120px; flex-shrink: 0; }
-                .info-value { color: #1e293b; font-weight: 500; }
-                .stats { display: flex; gap: 16px; margin: 16px 0; }
-                .stat { padding: 12px 16px; border-radius: 8px; text-align: center; }
-                .stat-ok { background: #dcfce7; color: #166534; }
-                .stat-fail { background: #fee2e2; color: #991b1b; }
-                .stat-number { font-size: 24px; font-weight: 700; }
-                .stat-label { font-size: 12px; }
-                .log-section { background: #f8fafc; padding: 12px; border-radius: 8px; margin-top: 12px; font-size: 13px; }
-                .footer { margin-top: 20px; text-align: center; color: #64748b; font-size: 12px; }
-                a { color: #2563eb; }
-              </style>
-            </head>
-            <body>
-              <div class="container">
-                <div class="header">
-                  <h1>${{ steps.email.outputs.status }}</h1>
-                  <p>Daglig E2E-test for app.nettside.ai</p>
-                </div>
-                <div class="content">
-                  <div class="section">
-                    <div class="section-title">Testinfo</div>
-                    <div class="info-row">
-                      <span class="info-label">Tidspunkt:</span>
-                      <span class="info-value">${{ steps.email.outputs.date }}</span>
-                    </div>
-                    <div class="info-row">
-                      <span class="info-label">Testbedrift:</span>
-                      <span class="info-value">${{ steps.parse.outputs.bedrift }}</span>
-                    </div>
-                    <div class="info-row">
-                      <span class="info-label">Test-epost:</span>
-                      <span class="info-value">${{ steps.parse.outputs.epost }}</span>
-                    </div>
-                    <div class="info-row">
-                      <span class="info-label">Kladd-URL:</span>
-                      <span class="info-value">${{ steps.parse.outputs.kladd_url }}</span>
-                    </div>
-                  </div>
-                  <div class="section">
-                    <div class="section-title">Resultat</div>
-                    <div class="stats">
-                      <div class="stat stat-ok">
-                        <div class="stat-number">${{ steps.parse.outputs.ok }}</div>
-                        <div class="stat-label">STEG OK</div>
-                      </div>
-                      <div class="stat stat-fail">
-                        <div class="stat-number">${{ steps.parse.outputs.feilet }}</div>
-                        <div class="stat-label">STEG FEILET</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="section">
-                    <div class="section-title">Feilede steg</div>
-                    <div class="log-section">${{ steps.parse.outputs.feil || 'Ingen feil' }}</div>
-                  </div>
-                  <div class="section">
-                    <div class="section-title">Toast-meldinger</div>
-                    <div class="log-section">${{ steps.parse.outputs.toasts || 'Ingen toast-meldinger' }}</div>
-                  </div>
-                  <div class="section">
-                    <div class="section-title">Nettverksfeil</div>
-                    <div class="log-section">${{ steps.parse.outputs.network || 'Ingen nettverksfeil' }}</div>
-                  </div>
-                  <div class="section">
-                    <div class="section-title">JavaScript-feil</div>
-                    <div class="log-section">${{ steps.parse.outputs.errors || 'Ingen JS-feil' }}</div>
-                  </div>
-                  <div class="section">
-                    <div class="section-title">Lenker</div>
-                    <p><a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">📊 Full rapport og screenshots på GitHub</a></p>
-                  </div>
-                </div>
-                <div class="footer">
-                  <p>Automatisk generert av Nettside.ai testovervåkning</p>
-                </div>
-              </div>
-            </body>
-            </html>
+# VERSION: 2.0
+2name: Daglig E2E Test - Nettside.ai
+3
+4on:
+5  schedule:
+6    - cron: '0 7 * * *'  # 08:00 norsk tid (07:00 UTC)
+7  workflow_dispatch:      # Manuell kjøring
+8
+9jobs:
+10  test:
+11    name: E2E Test - Komplett flyt
+12    runs-on: ubuntu-latest
+13    timeout-minutes: 20
+14    
+15    steps:
+16      - name: Checkout repo
+17        uses: actions/checkout@v4
+18
+19      - name: Setup Node.js
+20        uses: actions/setup-node@v4
+21        with:
+22          node-version: '20'
+23          cache: 'npm'
+24
+25      - name: Install dependencies
+26        run: npm install
+27
+28      - name: Install Playwright browsers
+29        run: npx playwright install chromium --with-deps
+30
+31      - name: Run Playwright tests
+32        id: test
+33        run: npx playwright test 2>&1 | tee test-output.log
+34        continue-on-error: true
+35
+36      - name: Upload test results
+37        uses: actions/upload-artifact@v4
+38        if: always()
+39        with:
+40          name: test-results
+41          path: |
+42            test-results/
+43            playwright-report/
+44          retention-days: 30
+45
+46      - name: Parse test results
+47        id: parse
+48        if: always()
+49        run: |
+50          if [ -f "test-results/rapport.json" ]; then
+51            BEDRIFT=$(jq -r '.bedrift' test-results/rapport.json)
+52            EPOST=$(jq -r '.epost' test-results/rapport.json)
+53            KLADD_URL=$(jq -r '.kladdUrl // "Ikke generert"' test-results/rapport.json)
+54            
+55            OK=$(jq '[.steg[] | select(.status == "OK")] | length' test-results/rapport.json)
+56            FEILET=$(jq '[.steg[] | select(.status == "FEILET")] | length' test-results/rapport.json)
+57            
+58            FEIL=$(jq -r '[.steg[] | select(.status == "FEILET") | "❌ \(.navn): \(.melding)"] | join("<br>")' test-results/rapport.json)
+59            TOASTS=$(jq -r '[.logs[] | select(.type == "toast") | "💬 \(.message)"] | join("<br>")' test-results/rapport.json)
+60            NETWORK=$(jq -r '[.logs[] | select(.type == "network") | "🌐 \(.message)"] | join("<br>")' test-results/rapport.json)
+61            ERRORS=$(jq -r '[.logs[] | select(.type == "error") | "⚠️ \(.message)"] | join("<br>")' test-results/rapport.json)
+62            
+63            echo "bedrift=$BEDRIFT" >> $GITHUB_OUTPUT
+64            echo "epost=$EPOST" >> $GITHUB_OUTPUT
+65            echo "kladd_url=$KLADD_URL" >> $GITHUB_OUTPUT
+66            echo "ok=$OK" >> $GITHUB_OUTPUT
+67            echo "feilet=$FEILET" >> $GITHUB_OUTPUT
+68            
+69            {
+70              echo "feil<<EOF"
+71              echo "$FEIL"
+72              echo "EOF"
+73            } >> $GITHUB_OUTPUT
+74            
+75            {
+76              echo "toasts<<EOF"
+77              echo "$TOASTS"
+78              echo "EOF"
+79            } >> $GITHUB_OUTPUT
+80            
+81            {
+82              echo "network<<EOF"
+83              echo "$NETWORK"
+84              echo "EOF"
+85            } >> $GITHUB_OUTPUT
+86            
+87            {
+88              echo "errors<<EOF"
+89              echo "$ERRORS"
+90              echo "EOF"
+91            } >> $GITHUB_OUTPUT
+92          else
+93            echo "bedrift=Ukjent" >> $GITHUB_OUTPUT
+94            echo "epost=Ukjent" >> $GITHUB_OUTPUT
+95            echo "kladd_url=Ikke generert" >> $GITHUB_OUTPUT
+96            echo "ok=0" >> $GITHUB_OUTPUT
+97            echo "feilet=0" >> $GITHUB_OUTPUT
+98            echo "feil=Ingen rapport generert" >> $GITHUB_OUTPUT
+99            echo "toasts=" >> $GITHUB_OUTPUT
+100            echo "network=" >> $GITHUB_OUTPUT
+101            echo "errors=" >> $GITHUB_OUTPUT
+102          fi
+103
+104      - name: Prepare email content
+105        id: email
+106        if: always()
+107        run: |
+108          if [ "${{ steps.test.outcome }}" == "success" ]; then
+109            echo "status=✅ BESTÅTT" >> $GITHUB_OUTPUT
+110            echo "color=#22c55e" >> $GITHUB_OUTPUT
+111          else
+112            echo "status=❌ FEILET" >> $GITHUB_OUTPUT
+113            echo "color=#ef4444" >> $GITHUB_OUTPUT
+114          fi
+115          echo "date=$(TZ='Europe/Oslo' date '+%d.%m.%Y kl %H:%M')" >> $GITHUB_OUTPUT
+116
+117      - name: Send email via Resend
+118        if: always()
+119        uses: dawidd6/action-send-mail@v3
+120        with:
+121          server_address: smtp.resend.com
+122          server_port: 465
+123          secure: true
+124          username: resend
+125          password: ${{ secrets.RESEND_API_KEY }}
+126          subject: "${{ steps.email.outputs.status }} - Nettside.ai test (${{ steps.email.outputs.date }})"
+127          to: kundesenter@nettside.ai
+128          from: Nettside.ai Test <test@nettside.ai>
+129          html_body: |
+130            <!DOCTYPE html>
+131            <html>
+132            <head>
+133              <style>
+134                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; background: #f1f5f9; }
+135                .container { max-width: 600px; margin: 0 auto; }
+136                .header { background: ${{ steps.email.outputs.color }}; color: white; padding: 24px; border-radius: 12px 12px 0 0; }
+137                .header h1 { margin: 0; font-size: 24px; }
+138                .header p { margin: 8px 0 0 0; opacity: 0.9; }
+139                .content { background: white; padding: 24px; border-radius: 0 0 12px 12px; }
+140                .section { margin-bottom: 20px; }
+141                .section-title { font-weight: 600; color: #334155; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; }
+142                .info-row { display: flex; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
+143                .info-label { color: #64748b; width: 120px; flex-shrink: 0; }
+144                .info-value { color: #1e293b; font-weight: 500; }
+145                .stats { display: flex; gap: 16px; margin: 16px 0; }
+146                .stat { padding: 12px 16px; border-radius: 8px; text-align: center; }
+147                .stat-ok { background: #dcfce7; color: #166534; }
+148                .stat-fail { background: #fee2e2; color: #991b1b; }
+149                .stat-number { font-size: 24px; font-weight: 700; }
+150                .stat-label { font-size: 12px; }
+151                .log-section { background: #f8fafc; padding: 12px; border-radius: 8px; margin-top: 12px; font-size: 13px; }
+152                .footer { margin-top: 20px; text-align: center; color: #64748b; font-size: 12px; }
+153                a { color: #2563eb; }
+154              </style>
+155            </head>
+156            <body>
+157              <div class="container">
+158                <div class="header">
+159                  <h1>${{ steps.email.outputs.status }}</h1>
+160                  <p>Daglig E2E-test for app.nettside.ai</p>
+161                </div>
+162                <div class="content">
+163                  <div class="section">
+164                    <div class="section-title">Testinfo</div>
+165                    <div class="info-row">
+166                      <span class="info-label">Tidspunkt:</span>
+167                      <span class="info-value">${{ steps.email.outputs.date }}</span>
+168                    </div>
+169                    <div class="info-row">
+170                      <span class="info-label">Testbedrift:</span>
+171                      <span class="info-value">${{ steps.parse.outputs.bedrift }}</span>
+172                    </div>
+173                    <div class="info-row">
+174                      <span class="info-label">Test-epost:</span>
+175                      <span class="info-value">${{ steps.parse.outputs.epost }}</span>
+176                    </div>
+177                    <div class="info-row">
+178                      <span class="info-label">Kladd-URL:</span>
+179                      <span class="info-value">${{ steps.parse.outputs.kladd_url }}</span>
+180                    </div>
+181                  </div>
+182                  <div class="section">
+183                    <div class="section-title">Resultat</div>
+184                    <div class="stats">
+185                      <div class="stat stat-ok">
+186                        <div class="stat-number">${{ steps.parse.outputs.ok }}</div>
+187                        <div class="stat-label">STEG OK</div>
+188                      </div>
+189                      <div class="stat stat-fail">
+190                        <div class="stat-number">${{ steps.parse.outputs.feilet }}</div>
+191                        <div class="stat-label">STEG FEILET</div>
+192                      </div>
+193                    </div>
+194                  </div>
+195                  <div class="section">
+196                    <div class="section-title">Feilede steg</div>
+197                    <div class="log-section">${{ steps.parse.outputs.feil || 'Ingen feil' }}</div>
+198                  </div>
+199                  <div class="section">
+200                    <div class="section-title">Toast-meldinger</div>
+201                    <div class="log-section">${{ steps.parse.outputs.toasts || 'Ingen toast-meldinger' }}</div>
+202                  </div>
+203                  <div class="section">
+204                    <div class="section-title">Nettverksfeil</div>
+205                    <div class="log-section">${{ steps.parse.outputs.network || 'Ingen nettverksfeil' }}</div>
+206                  </div>
+207                  <div class="section">
+208                    <div class="section-title">JavaScript-feil</div>
+209                    <div class="log-section">${{ steps.parse.outputs.errors || 'Ingen JS-feil' }}</div>
+210                  </div>
+211                  <div class="section">
+212                    <div class="section-title">Lenker</div>
+213                    <p><a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">📊 Full rapport og screenshots på GitHub</a></p>
+214                  </div>
+215                </div>
+216                <div class="footer">
+217                  <p>Automatisk generert av Nettside.ai testovervåkning</p>
+218                </div>
+219              </div>
+220            </body>
+221            </html>
+222

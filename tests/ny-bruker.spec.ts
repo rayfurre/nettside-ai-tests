@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 5.0 (iframe-støtte, korrekte selektorer fra Lovable)
+// VERSION: 6.0 (data-testid selektorer, stabile attributter)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -38,6 +38,37 @@ interface StepResult {
 }
 
 // ===================================================
+// Selektorer (data-testid)
+// ===================================================
+
+const SEL = {
+  // Preview & Editor
+  previewIframe:      '[data-testid="preview-iframe"]',
+  editorIframe:       '[data-testid="editor-iframe"]',
+  editButton:         '[data-testid="edit-button"]',
+  saveChangesButton:  '[data-testid="save-changes-button"]',
+  cancelEditButton:   '[data-testid="cancel-edit-button"]',
+  hintText:           '[data-testid="hint-click-text"]',
+  hintImages:         '[data-testid="hint-click-images"]',
+
+  // Bilde-modal (hovedsiden)
+  imageDialog:        '[data-testid="image-edit-dialog"]',
+  tabUpload:          '[data-testid="tab-upload"]',
+  tabUrl:             '[data-testid="tab-url"]',
+  tabAi:              '[data-testid="tab-ai"]',
+  aiPromptInput:      '[data-testid="ai-prompt-input"]',
+  enhancePromptBtn:   '[data-testid="enhance-prompt-button"]',
+  generateAiBtn:      '[data-testid="generate-ai-button"]',
+  useImageBtn:        '[data-testid="use-image-button"]',
+
+  // ActionBar
+  saveButton:         '[data-testid="save-button"]',
+  updateButton:       '[data-testid="update-button"]',
+  draftButton:        '[data-testid="draft-button"]',
+  publishButton:      '[data-testid="publish-button"]',
+};
+
+// ===================================================
 // Konstanter
 // ===================================================
 
@@ -72,11 +103,9 @@ async function setupMonitoring(page: Page, logs: LogEntry[]): Promise<void> {
       logs.push({ timestamp: new Date().toISOString(), type: type as 'error' | 'warning', message: text, details: msg.location().url });
     }
   });
-
   page.on('pageerror', (error) => {
     logs.push({ timestamp: new Date().toISOString(), type: 'error', message: `JS Error: ${error.message}`, details: error.stack });
   });
-
   page.on('response', (response) => {
     const status = response.status();
     const url = response.url();
@@ -84,7 +113,6 @@ async function setupMonitoring(page: Page, logs: LogEntry[]): Promise<void> {
       logs.push({ timestamp: new Date().toISOString(), type: 'network', message: `HTTP ${status}: ${url}`, details: response.statusText() });
     }
   });
-
   page.on('requestfailed', (request) => {
     const url = request.url();
     if (isIgnoredUrl(url)) return;
@@ -128,26 +156,26 @@ function createTestImage(): string {
   return path.resolve(testImagePath);
 }
 
-// ----- Editor-hjelpefunksjoner (hovedsiden, ikke iframe) -----
+// ----- Editor-hjelpefunksjoner -----
 
 async function enterEditMode(page: Page): Promise<boolean> {
   try {
-    // "Rediger"-knappen er i hovedsiden (WebsitePreview toolbar)
-    const redigerButton = page.locator('button').filter({ has: page.locator('span', { hasText: 'Rediger' }) }).first();
-    await expect(redigerButton).toBeVisible({ timeout: 10000 });
-    await redigerButton.click();
+    // Vent på at preview-iframe har innhold (Rediger vises bare da)
+    await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 30000 });
+
+    // Klikk "Rediger"-knappen i hovedsiden
+    await expect(page.locator(SEL.editButton)).toBeVisible({ timeout: 10000 });
+    await page.locator(SEL.editButton).click();
     await page.waitForTimeout(2000);
 
-    // Verifiser: iframe bytter fra "Forhåndsvisning" til "Visuell redigering"
-    const editorIframe = page.locator('iframe[title="Visuell redigering"]');
-    const visible = await editorIframe.isVisible().catch(() => false);
-    if (visible) return true;
+    // Verifiser: editor-iframe er synlig
+    const editorVisible = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
+    if (editorVisible) return true;
 
-    // Fallback: sjekk etter editor-header-indikatorer i hovedsiden
-    for (const text of ['Klikk tekst', 'Klikk bilder', 'Lagre endringer']) {
-      const indicator = await page.locator(`span:has-text("${text}")`).first().isVisible().catch(() => false);
-      if (indicator) return true;
-    }
+    // Fallback: sjekk hint-indikatorer
+    const hintVisible = await page.locator(SEL.hintText).isVisible().catch(() => false);
+    if (hintVisible) return true;
+
     return false;
   } catch {
     return false;
@@ -156,18 +184,16 @@ async function enterEditMode(page: Page): Promise<boolean> {
 
 async function saveEditorChanges(page: Page): Promise<boolean> {
   try {
-    // "Lagre endringer" er i hovedsiden (editor-header)
-    const lagreButton = page.locator('button').filter({ has: page.locator('span', { hasText: 'Lagre endringer' }) }).first();
-    const visible = await lagreButton.isVisible().catch(() => false);
+    const btn = page.locator(SEL.saveChangesButton);
+    const visible = await btn.isVisible().catch(() => false);
     if (visible) {
-      const disabled = await lagreButton.isDisabled().catch(() => true);
+      const disabled = await btn.isDisabled().catch(() => true);
       if (!disabled) {
-        await lagreButton.click();
+        await btn.click();
         await page.waitForTimeout(3000);
         return true;
       }
-      // Knappen er disabled = ingen endringer å lagre (kan være OK)
-      return true;
+      return true; // disabled = ingen endringer, OK
     }
     return false;
   } catch {
@@ -175,14 +201,14 @@ async function saveEditorChanges(page: Page): Promise<boolean> {
   }
 }
 
-async function getEditorIframe(page: Page): Promise<FrameLocator> {
-  return page.frameLocator('iframe[title="Visuell redigering"]');
+function getEditorIframe(page: Page): FrameLocator {
+  return page.frameLocator(SEL.editorIframe);
 }
 
-async function openImageModalViaIframe(page: Page): Promise<boolean> {
+async function openImageModal(page: Page): Promise<boolean> {
   try {
-    const iframe = await getEditorIframe(page);
-    // Klikk på et bilde inne i iframen — modalen åpnes i hovedsiden via postMessage
+    const iframe = getEditorIframe(page);
+    // Klikk på et bilde inne i editor-iframen
     const allImages = await iframe.locator('img').all();
     for (const img of allImages) {
       const visible = await img.isVisible().catch(() => false);
@@ -191,8 +217,8 @@ async function openImageModalViaIframe(page: Page): Promise<boolean> {
       if (width <= 50) continue;
       await img.click();
       await page.waitForTimeout(2000);
-      // Modalen åpnes i hovedsiden (Radix Dialog)
-      const modalOpen = await page.locator('[role="dialog"]').filter({ hasText: /Endre bilde|Erstatt illustrasjon/ }).first().isVisible().catch(() => false);
+      // Modal åpnes i hovedsiden via postMessage
+      const modalOpen = await page.locator(SEL.imageDialog).isVisible().catch(() => false);
       if (modalOpen) return true;
     }
     return false;
@@ -219,10 +245,7 @@ function printReport(result: TestResult): void {
     console.log(`   ${steg.melding}`);
   }
 
-  if (result.kladdUrl) {
-    console.log('\n🔗 KLADD-URL:');
-    console.log(`   ${result.kladdUrl}`);
-  }
+  if (result.kladdUrl) { console.log(`\n🔗 KLADD-URL:\n   ${result.kladdUrl}`); }
 
   const errors = result.logs.filter(l => l.type === 'error');
   const networkErrors = result.logs.filter(l => l.type === 'network');
@@ -268,21 +291,32 @@ test.describe('Nettside.ai - Komplett test', () => {
 
     await setupMonitoring(page, logs);
 
+    // Guard: avbryt hele testen hvis siden ikke laster
+    let sideLastet = false;
+
     // ========================================
     // STEG 1: Åpne app.nettside.ai
     // ========================================
     let stegStart = Date.now();
     try {
-      await page.goto('/', { timeout: 30000 });
-      await page.waitForLoadState('networkidle', { timeout: 30000 });
-      await expect(page.getByText('Firmanavn').first()).toBeVisible({ timeout: 10000 });
+      await page.goto('/', { timeout: 60000 });
+      await page.waitForLoadState('networkidle', { timeout: 60000 });
+      await expect(page.getByText('Firmanavn').first()).toBeVisible({ timeout: 15000 });
       await collectToasts(page, logs);
+      sideLastet = true;
       result.steg.push({ navn: 'Steg 1: Åpne app.nettside.ai', status: 'OK', melding: 'Siden lastet, skjema synlig', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg1-feil.png' }).catch(() => {});
       result.screenshots.push('steg1-feil.png');
       await collectToasts(page, logs);
       result.steg.push({ navn: 'Steg 1: Åpne app.nettside.ai', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+    }
+
+    if (!sideLastet) {
+      result.sluttTid = new Date().toLocaleString('nb-NO', { timeZone: 'Europe/Oslo' });
+      printReport(result);
+      fs.writeFileSync('test-results/rapport.json', JSON.stringify(result, null, 2));
+      throw new Error('Steg 1 feilet: Siden lastet ikke — avbryter testen');
     }
 
     // ========================================
@@ -309,9 +343,8 @@ test.describe('Nettside.ai - Komplett test', () => {
     // ========================================
     stegStart = Date.now();
     try {
-      const lagreButton = page.locator('button').filter({ has: page.locator('span', { hasText: 'Lagre' }) }).first();
-      await expect(lagreButton).toBeVisible({ timeout: 5000 });
-      await lagreButton.click();
+      await expect(page.locator(SEL.saveButton)).toBeVisible({ timeout: 5000 });
+      await page.locator(SEL.saveButton).click();
       await collectToasts(page, logs);
       result.steg.push({ navn: 'Steg 3: Klikk Lagre', status: 'OK', melding: 'Lagre-knapp klikket', tidBrukt: Date.now() - stegStart });
     } catch (error) {
@@ -364,14 +397,15 @@ test.describe('Nettside.ai - Komplett test', () => {
       let elapsed = 0;
 
       while (!genereringFullfort && elapsed < maxWait) {
-        // Sjekk Kladd-knappen i ActionBar (bunn-bar)
-        const kladdVisible = await page.locator('button').filter({ has: page.locator('span', { hasText: 'Kladd' }) }).first().isVisible().catch(() => false);
+        // Sjekk Kladd-knappen i ActionBar
+        const kladdVisible = await page.locator(SEL.draftButton).isVisible().catch(() => false);
         if (kladdVisible) { genereringFullfort = true; break; }
 
-        const previewVisible = await page.locator('iframe[title="Forhåndsvisning av nettside"]').first().isVisible().catch(() => false);
+        // Sjekk om preview-iframe dukker opp
+        const previewVisible = await page.locator(SEL.previewIframe).isVisible().catch(() => false);
         if (previewVisible) {
           await page.waitForTimeout(3000);
-          const kladdNow = await page.locator('button').filter({ has: page.locator('span', { hasText: 'Kladd' }) }).first().isVisible().catch(() => false);
+          const kladdNow = await page.locator(SEL.draftButton).isVisible().catch(() => false);
           if (kladdNow) { genereringFullfort = true; break; }
         }
         await page.waitForTimeout(pollInterval);
@@ -398,19 +432,15 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     // ========================================
-    // STEG 6: Klikk Kladd-knappen (ActionBar)
+    // STEG 6: Klikk Kladd (ActionBar)
     // ========================================
     stegStart = Date.now();
     try {
-      const kladdButton = page.locator('button').filter({ has: page.locator('span', { hasText: 'Kladd' }) }).first();
-      const isVisible = await kladdButton.isVisible().catch(() => false);
-      if (isVisible) {
-        await kladdButton.click();
-        await collectToasts(page, logs);
-        result.steg.push({ navn: 'Steg 6: Klikk Kladd', status: 'OK', melding: 'Kladd-knapp klikket', tidBrukt: Date.now() - stegStart });
-      } else {
-        throw new Error('Kladd-knapp ikke funnet');
-      }
+      const kladdBtn = page.locator(SEL.draftButton);
+      await expect(kladdBtn).toBeVisible({ timeout: 5000 });
+      await kladdBtn.click();
+      await collectToasts(page, logs);
+      result.steg.push({ navn: 'Steg 6: Klikk Kladd', status: 'OK', melding: 'Kladd-knapp klikket', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg6-feil.png' }).catch(() => {});
       result.screenshots.push('steg6-feil.png');
@@ -419,53 +449,61 @@ test.describe('Nettside.ai - Komplett test', () => {
 
     // ========================================
     // STEG 7: Hent kladd-URL
+    // Kladd åpner en dialog med URL etter polling (opptil 90s)
     // ========================================
     stegStart = Date.now();
     try {
-      // Kladd åpner en dialog med URL-en, vent på den
-      await page.waitForTimeout(5000);
-      await collectToasts(page, logs);
-
+      // Vent på at kladd-dialogen vises med URL
       const urlPatterns = [
         /https:\/\/draft\.kundesider\.pages\.dev\/[a-zA-Z0-9-]+\/?/,
         /https:\/\/draft--vibe-kundesider\.netlify\.app\/[a-zA-Z0-9-]+\/?/,
       ];
 
-      // Søk i hele sideinnholdet (inkl. dialoger)
-      const pageContent = await page.content();
-      for (const pattern of urlPatterns) {
-        const match = pageContent.match(pattern);
-        if (match) { result.kladdUrl = match[0]; break; }
-      }
+      const maxUrlWait = 100000; // 100s (appen poller 45x2s = 90s)
+      const urlPoll = 3000;
+      let urlElapsed = 0;
 
-      // Fallback: søk i lenker
-      if (!result.kladdUrl) {
-        const links = await page.locator('a[href*="draft"]').all();
-        for (const link of links) {
-          const href = await link.getAttribute('href');
-          if (href && (href.includes('draft.kundesider.pages.dev') || href.includes('draft--vibe-kundesider'))) {
-            result.kladdUrl = href; break;
+      while (!result.kladdUrl && urlElapsed < maxUrlWait) {
+        await page.waitForTimeout(urlPoll);
+        urlElapsed += urlPoll;
+        await collectToasts(page, logs);
+
+        // Søk i sideinnholdet (inkl. dialog)
+        const pageContent = await page.content();
+        for (const pattern of urlPatterns) {
+          const match = pageContent.match(pattern);
+          if (match) { result.kladdUrl = match[0]; break; }
+        }
+
+        // Søk i lenker
+        if (!result.kladdUrl) {
+          const links = await page.locator('a[href*="draft"]').all();
+          for (const link of links) {
+            const href = await link.getAttribute('href');
+            if (href && (href.includes('draft.kundesider.pages.dev') || href.includes('draft--vibe-kundesider'))) {
+              result.kladdUrl = href; break;
+            }
           }
         }
-      }
 
-      // Fallback: søk i toasts
-      if (!result.kladdUrl) {
-        for (const log of logs) {
-          for (const pattern of urlPatterns) {
-            const match = log.message.match(pattern);
-            if (match) { result.kladdUrl = match[0]; break; }
+        // Søk i toasts
+        if (!result.kladdUrl) {
+          for (const log of logs) {
+            for (const pattern of urlPatterns) {
+              const match = log.message.match(pattern);
+              if (match) { result.kladdUrl = match[0]; break; }
+            }
+            if (result.kladdUrl) break;
           }
-          if (result.kladdUrl) break;
         }
       }
 
       if (result.kladdUrl) {
-        result.steg.push({ navn: 'Steg 7: Hent kladd-URL', status: 'OK', melding: `URL: ${result.kladdUrl}`, tidBrukt: Date.now() - stegStart });
+        result.steg.push({ navn: 'Steg 7: Hent kladd-URL', status: 'OK', melding: `URL: ${result.kladdUrl} (${Math.round(urlElapsed / 1000)}s)`, tidBrukt: Date.now() - stegStart });
       } else {
         await page.screenshot({ path: 'test-results/steg7-ingen-url.png' }).catch(() => {});
         result.screenshots.push('steg7-ingen-url.png');
-        result.steg.push({ navn: 'Steg 7: Hent kladd-URL', status: 'FEILET', melding: 'Kladd-URL ikke funnet', tidBrukt: Date.now() - stegStart });
+        result.steg.push({ navn: 'Steg 7: Hent kladd-URL', status: 'FEILET', melding: `Timeout etter ${Math.round(maxUrlWait / 1000)}s`, tidBrukt: Date.now() - stegStart });
       }
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg7-feil.png' }).catch(() => {});
@@ -518,10 +556,8 @@ test.describe('Nettside.ai - Komplett test', () => {
     //
     //  EDITOR-TESTER (steg 9-12)
     //  Bruker er innlogget, nettside er generert.
-    //  Preview vises i iframe[title="Forhåndsvisning av nettside"]
-    //  Editor vises i iframe[title="Visuell redigering"]
-    //  Alle knapper (Rediger, Lagre endringer) er i hovedsiden.
-    //  Bilder klikkes i iframe, modal åpnes i hovedsiden via postMessage.
+    //  Innhold redigeres i iframe (editor-iframe).
+    //  Knapper og modaler er i hovedsiden.
     //
     // ================================================================
 
@@ -540,7 +576,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({
         navn: 'Steg 9a: Aktiver redigeringsmodus',
         status: editModeActive ? 'OK' : 'FEILET',
-        melding: editModeActive ? 'Redigeringsmodus aktivert (iframe: Visuell redigering)' : 'Klarte ikke aktivere redigeringsmodus',
+        melding: editModeActive ? 'Editor-iframe synlig' : 'Redigeringsmodus ikke aktivert',
         tidBrukt: Date.now() - stegStart
       });
     } catch (error) {
@@ -555,9 +591,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     try {
       if (!editModeActive) throw new Error('Redigeringsmodus ikke aktiv');
 
-      const iframe = await getEditorIframe(page);
-
-      // Klikk på h1 eller h2 inne i editor-iframen
+      const iframe = getEditorIframe(page);
       let headingClicked = false;
       for (const tag of ['h1', 'h2']) {
         const heading = iframe.locator(tag).first();
@@ -571,11 +605,8 @@ test.describe('Nettside.ai - Komplett test', () => {
       }
       if (!headingClicked) throw new Error('Ingen overskrift funnet i editor-iframe');
 
-      // Teksten blir contenteditable inne i iframen etter klikk
       await page.keyboard.press('Control+A');
       await page.keyboard.type(testTekst);
-
-      // "Klikk utenfor teksten for å lagre" — klikk et annet sted i iframen
       await iframe.locator('body').click({ position: { x: 10, y: 10 } });
       await page.waitForTimeout(2000);
       await collectToasts(page, logs);
@@ -589,19 +620,14 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 9b: Endre overskrift', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 9c: Lagre endringer (hovedsiden)
+    // 9c: Lagre endringer
     stegStart = Date.now();
     try {
       const saved = await saveEditorChanges(page);
       await collectToasts(page, logs);
       await page.screenshot({ path: 'test-results/steg9c-lagret.png' }).catch(() => {});
       result.screenshots.push('steg9c-lagret.png');
-      result.steg.push({
-        navn: 'Steg 9c: Lagre tekstendring',
-        status: saved ? 'OK' : 'FEILET',
-        melding: saved ? 'Lagret' : '"Lagre endringer" ikke funnet',
-        tidBrukt: Date.now() - stegStart
-      });
+      result.steg.push({ navn: 'Steg 9c: Lagre tekstendring', status: saved ? 'OK' : 'FEILET', melding: saved ? 'Lagret' : 'Knapp ikke funnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       result.steg.push({ navn: 'Steg 9c: Lagre tekstendring', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
@@ -610,11 +636,10 @@ test.describe('Nettside.ai - Komplett test', () => {
     // STEG 10: Bilde - Last opp
     // ========================================
 
-    // 10a: Redigeringsmodus (kan allerede være aktiv)
+    // 10a: Redigeringsmodus
     stegStart = Date.now();
     try {
-      // Sjekk om vi allerede er i redigeringsmodus
-      const alreadyEditing = await page.locator('iframe[title="Visuell redigering"]').isVisible().catch(() => false);
+      const alreadyEditing = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
       if (!alreadyEditing) {
         editModeActive = await enterEditMode(page);
         if (!editModeActive) throw new Error('Kunne ikke aktivere redigeringsmodus');
@@ -629,29 +654,26 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 10b: Klikk bilde i iframe → modal i hovedsiden
     stegStart = Date.now();
     try {
-      const modalOpened = await openImageModalViaIframe(page);
-      if (!modalOpened) throw new Error('"Endre bilde"-modal åpnet ikke');
+      const modalOpened = await openImageModal(page);
+      if (!modalOpened) throw new Error('Bilde-modal åpnet ikke');
       await page.screenshot({ path: 'test-results/steg10b-modal.png' }).catch(() => {});
       result.screenshots.push('steg10b-modal.png');
-      result.steg.push({ navn: 'Steg 10b: Åpne bilde-modal', status: 'OK', melding: 'Modal åpnet via iframe→postMessage', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 10b: Åpne bilde-modal', status: 'OK', melding: 'Modal åpnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg10b-feil.png' }).catch(() => {});
       result.screenshots.push('steg10b-feil.png');
       result.steg.push({ navn: 'Steg 10b: Åpne bilde-modal', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 10c: Velg "Last opp"-fane og last opp bilde
+    // 10c: Velg "Last opp"-fane og last opp
     stegStart = Date.now();
     try {
-      // Klikk "Last opp"-fanen (Radix tab i hovedsiden)
-      await page.locator('button[role="tab"]').filter({ has: page.locator('span', { hasText: 'Last opp' }) }).first().click();
+      await page.locator(SEL.tabUpload).click();
       await page.waitForTimeout(500);
-
       const testImagePath = createTestImage();
       await page.locator('input[type="file"]').first().setInputFiles(testImagePath);
       await page.waitForTimeout(3000);
       await collectToasts(page, logs);
-
       await page.screenshot({ path: 'test-results/steg10c-opplastet.png' }).catch(() => {});
       result.screenshots.push('steg10c-opplastet.png');
       result.steg.push({ navn: 'Steg 10c: Last opp bilde', status: 'OK', melding: 'Testbilde lastet opp', tidBrukt: Date.now() - stegStart });
@@ -661,28 +683,26 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 10c: Last opp bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 10d: Lagre bildet (knapp i dialogen)
+    // 10d: Bruk dette bildet
     stegStart = Date.now();
     try {
-      // "Lagre"-knapp nederst i dialogen (ikke "Bruk dette bildet")
-      const lagreDialog = page.locator('[role="dialog"] button').filter({ has: page.locator('span', { hasText: 'Lagre' }) }).first();
-      await expect(lagreDialog).toBeVisible({ timeout: 10000 });
-      await lagreDialog.click();
+      await expect(page.locator(SEL.useImageBtn)).toBeVisible({ timeout: 10000 });
+      await page.locator(SEL.useImageBtn).click();
       await page.waitForTimeout(3000);
       await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 10d: Lagre bilde i dialog', status: 'OK', melding: 'Bilde lagret', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 10d: Bruk bildet', status: 'OK', melding: 'Bilde valgt', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg10d-feil.png' }).catch(() => {});
       result.screenshots.push('steg10d-feil.png');
-      result.steg.push({ navn: 'Steg 10d: Lagre bilde i dialog', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 10d: Bruk bildet', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 10e: Lagre endringer i editoren
+    // 10e: Lagre editor
     stegStart = Date.now();
     try {
       const saved = await saveEditorChanges(page);
       await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 10e: Lagre editor', status: saved ? 'OK' : 'FEILET', melding: saved ? 'Lagret' : '"Lagre endringer" ikke funnet', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 10e: Lagre editor', status: saved ? 'OK' : 'FEILET', melding: saved ? 'Lagret' : 'Knapp ikke funnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       result.steg.push({ navn: 'Steg 10e: Lagre editor', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
@@ -696,7 +716,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 11a: Redigeringsmodus
     stegStart = Date.now();
     try {
-      const alreadyEditing = await page.locator('iframe[title="Visuell redigering"]').isVisible().catch(() => false);
+      const alreadyEditing = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
       if (!alreadyEditing) {
         const ok = await enterEditMode(page);
         if (!ok) throw new Error('Kunne ikke aktivere redigeringsmodus');
@@ -711,7 +731,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 11b: Åpne bilde-modal
     stegStart = Date.now();
     try {
-      const modalOpened = await openImageModalViaIframe(page);
+      const modalOpened = await openImageModal(page);
       if (!modalOpened) throw new Error('Modal åpnet ikke');
       result.steg.push({ navn: 'Steg 11b: Åpne bilde-modal', status: 'OK', melding: 'Modal åpnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
@@ -720,20 +740,20 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 11b: Åpne bilde-modal', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 11c: Klikk "URL"-fane og lim inn
+    // 11c: URL-fane og lim inn
     stegStart = Date.now();
     try {
-      await page.locator('button[role="tab"]').filter({ has: page.locator('span', { hasText: 'URL' }) }).first().click();
+      await page.locator(SEL.tabUrl).click();
       await page.waitForTimeout(1000);
 
       // Finn URL-input i dialogen
-      const urlInput = page.locator('[role="dialog"] input[type="url"], [role="dialog"] input[placeholder*="URL"], [role="dialog"] input[placeholder*="http"]').first();
+      const urlInput = page.locator(`${SEL.imageDialog} input[type="url"], ${SEL.imageDialog} input[placeholder*="URL"], ${SEL.imageDialog} input[placeholder*="http"]`).first();
       let filled = await urlInput.isVisible().catch(() => false);
       if (filled) {
         await urlInput.fill(testBildeUrl);
       } else {
-        // Fallback: finn alle synlige inputs i dialogen
-        const inputs = await page.locator('[role="dialog"] input').all();
+        // Fallback
+        const inputs = await page.locator(`${SEL.imageDialog} input`).all();
         for (const input of inputs) {
           const vis = await input.isVisible().catch(() => false);
           const type = await input.getAttribute('type').catch(() => '');
@@ -742,7 +762,6 @@ test.describe('Nettside.ai - Komplett test', () => {
       }
       if (!filled) throw new Error('URL-input ikke funnet');
       await page.waitForTimeout(3000);
-
       result.steg.push({ navn: 'Steg 11c: Lim inn bilde-URL', status: 'OK', melding: 'Unsplash-URL limt inn', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg11c-feil.png' }).catch(() => {});
@@ -750,19 +769,18 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 11c: Lim inn bilde-URL', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 11d: Lagre bilde i dialog
+    // 11d: Bruk bildet
     stegStart = Date.now();
     try {
-      const lagreDialog = page.locator('[role="dialog"] button').filter({ has: page.locator('span', { hasText: 'Lagre' }) }).first();
-      await expect(lagreDialog).toBeVisible({ timeout: 10000 });
-      await lagreDialog.click();
+      await expect(page.locator(SEL.useImageBtn)).toBeVisible({ timeout: 10000 });
+      await page.locator(SEL.useImageBtn).click();
       await page.waitForTimeout(3000);
       await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 11d: Lagre URL-bilde', status: 'OK', melding: 'Lagret', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 11d: Bruk URL-bilde', status: 'OK', melding: 'Lagret', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg11d-feil.png' }).catch(() => {});
       result.screenshots.push('steg11d-feil.png');
-      result.steg.push({ navn: 'Steg 11d: Lagre URL-bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 11d: Bruk URL-bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
     // 11e: Lagre editor
@@ -770,7 +788,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     try {
       const saved = await saveEditorChanges(page);
       await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 11e: Lagre editor', status: saved ? 'OK' : 'FEILET', melding: saved ? 'Lagret' : '"Lagre endringer" ikke funnet', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 11e: Lagre editor', status: saved ? 'OK' : 'FEILET', melding: saved ? 'Lagret' : 'Knapp ikke funnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       result.steg.push({ navn: 'Steg 11e: Lagre editor', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
@@ -782,7 +800,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 12a: Redigeringsmodus
     stegStart = Date.now();
     try {
-      const alreadyEditing = await page.locator('iframe[title="Visuell redigering"]').isVisible().catch(() => false);
+      const alreadyEditing = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
       if (!alreadyEditing) {
         const ok = await enterEditMode(page);
         if (!ok) throw new Error('Kunne ikke aktivere redigeringsmodus');
@@ -797,7 +815,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 12b: Åpne bilde-modal
     stegStart = Date.now();
     try {
-      const modalOpened = await openImageModalViaIframe(page);
+      const modalOpened = await openImageModal(page);
       if (!modalOpened) throw new Error('Modal åpnet ikke');
       result.steg.push({ navn: 'Steg 12b: Åpne bilde-modal', status: 'OK', melding: 'Modal åpnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
@@ -806,21 +824,20 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 12b: Åpne bilde-modal', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 12c: Klikk AI-fane og vent på beskrivelse
+    // 12c: AI-fane → vent på beskrivelse
     stegStart = Date.now();
     try {
-      await page.locator('button[role="tab"]').filter({ has: page.locator('span', { hasText: 'AI' }) }).first().click();
+      await page.locator(SEL.tabAi).click();
       await page.waitForTimeout(2000);
 
-      // Vent på at textarea ("Beskriv bildet") fylles med AI-generert tekst
-      const promptTextarea = page.locator('[role="dialog"] textarea').first();
+      const promptInput = page.locator(SEL.aiPromptInput);
       const maxWait = 30000;
       const poll = 2000;
       let elapsed = 0;
       let ready = false;
 
       while (!ready && elapsed < maxWait) {
-        const value = await promptTextarea.inputValue().catch(() => '');
+        const value = await promptInput.inputValue().catch(() => '');
         if (value.length > 10) {
           ready = true;
           console.log(`   ✅ AI-beskrivelse: "${value.substring(0, 60)}..."`);
@@ -835,7 +852,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({
         navn: 'Steg 12c: Vent på AI-beskrivelse',
         status: ready ? 'OK' : 'FEILET',
-        melding: ready ? `Mottatt etter ${Math.round(elapsed / 1000)}s` : `Timeout etter ${Math.round(maxWait / 1000)}s`,
+        melding: ready ? `Mottatt etter ${Math.round(elapsed / 1000)}s` : `Timeout`,
         tidBrukt: Date.now() - stegStart
       });
     } catch (error) {
@@ -847,10 +864,9 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 12d: Forbedre prompt
     stegStart = Date.now();
     try {
-      const promptBefore = await page.locator('[role="dialog"] textarea').first().inputValue().catch(() => '');
-      const forbedreBtn = page.locator('[role="dialog"] button').filter({ has: page.locator('span', { hasText: 'Forbedre' }) }).first();
-      await expect(forbedreBtn).toBeVisible({ timeout: 5000 });
-      await forbedreBtn.click();
+      const promptBefore = await page.locator(SEL.aiPromptInput).inputValue().catch(() => '');
+      await expect(page.locator(SEL.enhancePromptBtn)).toBeVisible({ timeout: 5000 });
+      await page.locator(SEL.enhancePromptBtn).click();
       console.log('   ⏳ Venter på forbedret prompt...');
 
       const maxWait = 15000;
@@ -861,7 +877,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       while (!done && elapsed < maxWait) {
         await page.waitForTimeout(poll);
         elapsed += poll;
-        const after = await page.locator('[role="dialog"] textarea').first().inputValue().catch(() => '');
+        const after = await page.locator(SEL.aiPromptInput).inputValue().catch(() => '');
         if (after !== promptBefore && after.length > 10) {
           done = true;
           console.log(`   ✅ Forbedret: "${after.substring(0, 60)}..."`);
@@ -873,7 +889,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({
         navn: 'Steg 12d: Forbedre prompt',
         status: done ? 'OK' : 'FEILET',
-        melding: done ? `Forbedret etter ${Math.round(elapsed / 1000)}s` : `Timeout`,
+        melding: done ? `Forbedret etter ${Math.round(elapsed / 1000)}s` : 'Timeout',
         tidBrukt: Date.now() - stegStart
       });
     } catch (error) {
@@ -885,10 +901,9 @@ test.describe('Nettside.ai - Komplett test', () => {
     // 12e: Generer med AI
     stegStart = Date.now();
     try {
-      const imgBefore = await page.locator('[role="dialog"] img').first().getAttribute('src').catch(() => '');
-      const genererBtn = page.locator('[role="dialog"] button').filter({ has: page.locator('span', { hasText: 'Generer' }) }).first();
-      await expect(genererBtn).toBeVisible({ timeout: 5000 });
-      await genererBtn.click();
+      const imgBefore = await page.locator(`${SEL.imageDialog} img`).first().getAttribute('src').catch(() => '');
+      await expect(page.locator(SEL.generateAiBtn)).toBeVisible({ timeout: 5000 });
+      await page.locator(SEL.generateAiBtn).click();
       console.log('   ⏳ Venter på AI-bildegenerering (30-90s)...');
 
       const maxWait = 90000;
@@ -900,7 +915,7 @@ test.describe('Nettside.ai - Komplett test', () => {
         await page.waitForTimeout(poll);
         elapsed += poll;
         await collectToasts(page, logs);
-        const imgAfter = await page.locator('[role="dialog"] img').first().getAttribute('src').catch(() => '');
+        const imgAfter = await page.locator(`${SEL.imageDialog} img`).first().getAttribute('src').catch(() => '');
         if (imgAfter && imgAfter !== imgBefore && imgAfter.length > 20) {
           done = true;
           console.log(`   ✅ AI-bilde generert etter ${Math.round(elapsed / 1000)}s`);
@@ -921,29 +936,28 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 12e: Generer med AI', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 12f: Lagre AI-bilde i dialog
+    // 12f: Bruk AI-bilde
     stegStart = Date.now();
     try {
-      const lagreDialog = page.locator('[role="dialog"] button').filter({ has: page.locator('span', { hasText: 'Lagre' }) }).first();
-      await expect(lagreDialog).toBeVisible({ timeout: 10000 });
-      await lagreDialog.click();
+      await expect(page.locator(SEL.useImageBtn)).toBeVisible({ timeout: 10000 });
+      await page.locator(SEL.useImageBtn).click();
       await page.waitForTimeout(3000);
       await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 12f: Lagre AI-bilde', status: 'OK', melding: 'AI-bilde lagret i dialog', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 12f: Bruk AI-bilde', status: 'OK', melding: 'AI-bilde valgt', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg12f-feil.png' }).catch(() => {});
       result.screenshots.push('steg12f-feil.png');
-      result.steg.push({ navn: 'Steg 12f: Lagre AI-bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 12f: Bruk AI-bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 12g: Lagre endringer i editoren
+    // 12g: Lagre editor
     stegStart = Date.now();
     try {
       const saved = await saveEditorChanges(page);
       await collectToasts(page, logs);
       await page.screenshot({ path: 'test-results/steg12g-lagret.png' }).catch(() => {});
       result.screenshots.push('steg12g-lagret.png');
-      result.steg.push({ navn: 'Steg 12g: Lagre editor', status: saved ? 'OK' : 'FEILET', melding: saved ? 'AI-bilde lagret' : '"Lagre endringer" ikke funnet', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 12g: Lagre editor', status: saved ? 'OK' : 'FEILET', melding: saved ? 'AI-bilde lagret' : 'Knapp ikke funnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       result.steg.push({ navn: 'Steg 12g: Lagre editor', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }

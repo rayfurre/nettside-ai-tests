@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker registrering og nettside-generering
-// VERSION: 2.0 (kjører alltid ferdig, rapporterer alt)
+// VERSION: 3.0 (fikset URL-mønster, retry på deploy, filtrert støy)
 // ===================================================
 
 import { test, expect, Page } from '@playwright/test';
@@ -31,14 +31,32 @@ interface StepResult {
   tidBrukt: number;
 }
 
+// Domener som skal ignoreres i nettverksfeil-logging (støy)
+const IGNORED_DOMAINS = [
+  'google-analytics.com',
+  'googletagmanager.com',
+  'analytics.google.com',
+  'www.google.com/pagead',
+  'doubleclick.net',
+  'facebook.net',
+  'hotjar.com',
+];
+
+function isIgnoredUrl(url: string): boolean {
+  return IGNORED_DOMAINS.some(domain => url.includes(domain));
+}
+
 async function setupMonitoring(page: Page, logs: LogEntry[]): Promise<void> {
   page.on('console', (msg) => {
     const type = msg.type();
     if (type === 'error' || type === 'warning') {
+      const text = msg.text();
+      // Filtrer bort GA/tracking-relaterte konsollmeldinger
+      if (isIgnoredUrl(text) || isIgnoredUrl(msg.location().url || '')) return;
       logs.push({
         timestamp: new Date().toISOString(),
         type: type as 'error' | 'warning',
-        message: msg.text(),
+        message: text,
         details: msg.location().url
       });
     }
@@ -55,21 +73,24 @@ async function setupMonitoring(page: Page, logs: LogEntry[]): Promise<void> {
   
   page.on('response', (response) => {
     const status = response.status();
-    if (status >= 400) {
+    const url = response.url();
+    if (status >= 400 && !isIgnoredUrl(url)) {
       logs.push({
         timestamp: new Date().toISOString(),
         type: 'network',
-        message: `HTTP ${status}: ${response.url()}`,
+        message: `HTTP ${status}: ${url}`,
         details: response.statusText()
       });
     }
   });
   
   page.on('requestfailed', (request) => {
+    const url = request.url();
+    if (isIgnoredUrl(url)) return;
     logs.push({
       timestamp: new Date().toISOString(),
       type: 'network',
-      message: `Request failed: ${request.url()}`,
+      message: `Request failed: ${url}`,
       details: request.failure()?.errorText
     });
   });
@@ -446,21 +467,71 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     // ========================================
-    // STEG 7: Hent kladd-URL fra varsel
+    // STEG 7: Hent kladd-URL
     // ========================================
     stegStart = Date.now();
     try {
-      // Vent på at varsel vises
+      // Vent på at varsel/toast vises med URL
       await page.waitForTimeout(5000);
       await collectToasts(page, logs);
       
-      // Finn URL i siden
-      const urlPattern = /https:\/\/draft--vibe-kundesider\.netlify\.app\/[a-zA-Z0-9-]+\/?/;
-      const pageContent = await page.content();
-      const urlMatch = pageContent.match(urlPattern);
+      // Oppdatert URL-mønster: Cloudflare Pages (draft.kundesider.pages.dev)
+      const urlPatterns = [
+        /https:\/\/draft\.kundesider\.pages\.dev\/[a-zA-Z0-9-]+\/?/,
+        /https:\/\/draft--vibe-kundesider\.netlify\.app\/[a-zA-Z0-9-]+\/?/,
+      ];
       
-      if (urlMatch) {
-        result.kladdUrl = urlMatch[0];
+      const pageContent = await page.content();
+      
+      for (const pattern of urlPatterns) {
+        const urlMatch = pageContent.match(pattern);
+        if (urlMatch) {
+          result.kladdUrl = urlMatch[0];
+          break;
+        }
+      }
+      
+      // Fallback: søk i lenker
+      if (!result.kladdUrl) {
+        const links = await page.locator('a[href*="draft"]').all();
+        for (const link of links) {
+          const href = await link.getAttribute('href');
+          if (href && (href.includes('draft.kundesider.pages.dev') || href.includes('draft--vibe-kundesider'))) {
+            result.kladdUrl = href;
+            break;
+          }
+        }
+      }
+      
+      // Fallback: søk i iframe src
+      if (!result.kladdUrl) {
+        const iframes = await page.locator('iframe').all();
+        for (const iframe of iframes) {
+          const src = await iframe.getAttribute('src');
+          if (src && src.includes('draft.kundesider.pages.dev')) {
+            result.kladdUrl = src;
+            break;
+          }
+        }
+      }
+      
+      // Fallback: søk i toast-meldinger vi allerede har fanget
+      if (!result.kladdUrl) {
+        for (const log of logs) {
+          if (log.type === 'toast' || log.type === 'network') {
+            for (const pattern of urlPatterns) {
+              const match = log.message.match(pattern);
+              if (match) {
+                result.kladdUrl = match[0];
+                break;
+              }
+            }
+            if (result.kladdUrl) break;
+          }
+        }
+      }
+      
+      if (result.kladdUrl) {
         result.steg.push({
           navn: 'Steg 7: Hent kladd-URL',
           status: 'OK',
@@ -468,34 +539,15 @@ test.describe('Nettside.ai - Komplett test', () => {
           tidBrukt: Date.now() - stegStart
         });
       } else {
-        // Prøv å finne lenke
-        const links = await page.locator('a[href*="netlify"]').all();
-        for (const link of links) {
-          const href = await link.getAttribute('href');
-          if (href && href.includes('draft--vibe-kundesider')) {
-            result.kladdUrl = href;
-            break;
-          }
-        }
+        await page.screenshot({ path: 'test-results/steg7-ingen-url.png' }).catch(() => {});
+        result.screenshots.push('steg7-ingen-url.png');
         
-        if (result.kladdUrl) {
-          result.steg.push({
-            navn: 'Steg 7: Hent kladd-URL',
-            status: 'OK',
-            melding: `URL funnet via lenke: ${result.kladdUrl}`,
-            tidBrukt: Date.now() - stegStart
-          });
-        } else {
-          await page.screenshot({ path: 'test-results/steg7-ingen-url.png' }).catch(() => {});
-          result.screenshots.push('steg7-ingen-url.png');
-          
-          result.steg.push({
-            navn: 'Steg 7: Hent kladd-URL',
-            status: 'FEILET',
-            melding: 'Kunne ikke finne kladd-URL i varselet',
-            tidBrukt: Date.now() - stegStart
-          });
-        }
+        result.steg.push({
+          navn: 'Steg 7: Hent kladd-URL',
+          status: 'FEILET',
+          melding: 'Kunne ikke finne kladd-URL (søkte i sideinnhold, lenker, iframes og toasts)',
+          tidBrukt: Date.now() - stegStart
+        });
       }
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg7-feil.png' }).catch(() => {});
@@ -512,31 +564,51 @@ test.describe('Nettside.ai - Komplett test', () => {
 
     // ========================================
     // STEG 8: Verifiser at kladd-URL fungerer
+    //         (med retry - deploy kan ta tid)
     // ========================================
     stegStart = Date.now();
     if (result.kladdUrl) {
       try {
         const newPage = await context.newPage();
-        const response = await newPage.goto(result.kladdUrl, { timeout: 30000 });
         
-        const status = response?.status() || 0;
-        const bodyContent = await newPage.locator('body').innerHTML().catch(() => '');
+        // Poll kladd-URL til den returnerer 200 (deploy til Cloudflare Pages kan ta 30-90s)
+        const maxRetries = 24;       // 24 forsøk
+        const retryInterval = 5000;  // 5 sek mellom hvert forsøk = maks 2 min
+        let finalStatus = 0;
+        let bodyContent = '';
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          const response = await newPage.goto(result.kladdUrl, { timeout: 15000 }).catch(() => null);
+          finalStatus = response?.status() || 0;
+          
+          if (finalStatus === 200) {
+            bodyContent = await newPage.locator('body').innerHTML().catch(() => '');
+            if (bodyContent.length > 500) {
+              break; // Siden er klar
+            }
+          }
+          
+          if (attempt < maxRetries) {
+            console.log(`   ⏳ Kladd-URL returnerte HTTP ${finalStatus}, forsøk ${attempt}/${maxRetries} - venter ${retryInterval / 1000}s...`);
+            await newPage.waitForTimeout(retryInterval);
+          }
+        }
         
         await newPage.screenshot({ path: 'test-results/steg8-kladd-side.png', fullPage: true }).catch(() => {});
         result.screenshots.push('steg8-kladd-side.png');
         
-        if (status === 200 && bodyContent.length > 500) {
+        if (finalStatus === 200 && bodyContent.length > 500) {
           result.steg.push({
             navn: 'Steg 8: Verifiser kladd-URL',
             status: 'OK',
-            melding: `HTTP ${status}, innhold: ${bodyContent.length} tegn`,
+            melding: `HTTP ${finalStatus}, innhold: ${bodyContent.length} tegn (etter ${Math.round((Date.now() - stegStart) / 1000)}s)`,
             tidBrukt: Date.now() - stegStart
           });
         } else {
           result.steg.push({
             navn: 'Steg 8: Verifiser kladd-URL',
             status: 'FEILET',
-            melding: `HTTP ${status}, innhold: ${bodyContent.length} tegn (forventet >500)`,
+            melding: `HTTP ${finalStatus}, innhold: ${bodyContent.length} tegn (forventet HTTP 200 og >500 tegn, ventet ${Math.round((Date.now() - stegStart) / 1000)}s)`,
             tidBrukt: Date.now() - stegStart
           });
         }

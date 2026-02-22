@@ -1,4 +1,4 @@
-# VERSION: 2.2
+# VERSION: 2.3
 name: Daglig E2E Test - Nettside.ai
 
 on:
@@ -126,7 +126,7 @@ jobs:
           password: ${{ secrets.RESEND_API_KEY }}
           subject: "${{ steps.email.outputs.status }} - Nettside.ai test (${{ steps.email.outputs.date }})"
           to: kundesenter@nettside.ai
-          from: Nettside.ai Test <test@nettside.ai>
+          from: Nettside.ai Test <kundesenter@nettside.ai>
           html_body: |
             <!DOCTYPE html>
             <html>

@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 6.3 (bedre openImageModal, vent på preview/bilder ved re-enter)
+// VERSION: 6.4 (robust dialog-lukking, verifisering)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -567,25 +567,58 @@ test.describe('Nettside.ai - Komplett test', () => {
     //
     // ================================================================
 
-    // Lukk Kladd-dialogen (den er modal og blokkerer alt)
+    // Lukk ALLE åpne dialoger (kladd-dialog blokkerer alt)
     stegStart = Date.now();
     try {
-      // Prøv Lukk-knapp først, deretter Escape
-      const lukkBtn = page.locator('[role="dialog"] button:has-text("Lukk")').first();
-      const lukkVisible = await lukkBtn.isVisible().catch(() => false);
-      if (lukkVisible) {
-        await lukkBtn.click();
-      } else {
+      // Prøv å lukke opptil 3 ganger
+      for (let i = 0; i < 3; i++) {
+        const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
+        if (!dialogOpen) break;
+
+        console.log(`   🔲 Dialog åpen, forsøk ${i + 1} å lukke...`);
+
+        // Prøv Lukk/Close-knapp
+        const lukkBtn = page.locator('[role="dialog"] button:has-text("Lukk"), [role="dialog"] button:has-text("Close"), [role="dialog"] button:has-text("OK")').first();
+        const lukkVisible = await lukkBtn.isVisible().catch(() => false);
+        if (lukkVisible) {
+          await lukkBtn.click();
+          await page.waitForTimeout(1000);
+          continue;
+        }
+
+        // Prøv X-knapp (Radix DialogClose)
+        const closeX = page.locator('[role="dialog"] button[aria-label="Close"], [role="dialog"] button:has(svg)').first();
+        const closeXVisible = await closeX.isVisible().catch(() => false);
+        if (closeXVisible) {
+          await closeX.click();
+          await page.waitForTimeout(1000);
+          continue;
+        }
+
+        // Siste utvei: Escape
         await page.keyboard.press('Escape');
+        await page.waitForTimeout(1000);
       }
-      await page.waitForTimeout(1000);
+
+      // Verifiser at dialog er lukket
+      const stillOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
       await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 8b: Lukk kladd-dialog', status: 'OK', melding: 'Dialog lukket', tidBrukt: Date.now() - stegStart });
+
+      result.steg.push({
+        navn: 'Steg 8b: Lukk dialog',
+        status: stillOpen ? 'FEILET' : 'OK',
+        melding: stillOpen ? 'Dialog fortsatt åpen!' : 'Alle dialoger lukket',
+        tidBrukt: Date.now() - stegStart
+      });
+
+      if (stillOpen) {
+        await page.screenshot({ path: 'test-results/steg8b-dialog-aapen.png' }).catch(() => {});
+        result.screenshots.push('steg8b-dialog-aapen.png');
+      }
     } catch (error) {
-      // Ikke kritisk — dialogen er kanskje allerede lukket
       await page.keyboard.press('Escape').catch(() => {});
       await page.waitForTimeout(500);
-      result.steg.push({ navn: 'Steg 8b: Lukk kladd-dialog', status: 'OK', melding: 'Ingen dialog å lukke', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 8b: Lukk dialog', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
     // ========================================

@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 6.1 (fjernet guard, domcontentloaded, alle steg rapporteres)
+// VERSION: 6.2 (lukk kladd-dialog, vent på EDITOR_READY)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -166,17 +166,14 @@ async function enterEditMode(page: Page): Promise<boolean> {
     // Klikk "Rediger"-knappen i hovedsiden
     await expect(page.locator(SEL.editButton)).toBeVisible({ timeout: 10000 });
     await page.locator(SEL.editButton).click();
-    await page.waitForTimeout(2000);
 
-    // Verifiser: editor-iframe er synlig
-    const editorVisible = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
-    if (editorVisible) return true;
+    // preview-iframe forsvinner, editor-iframe dukker opp
+    await expect(page.locator(SEL.editorIframe)).toBeVisible({ timeout: 10000 });
 
-    // Fallback: sjekk hint-indikatorer
-    const hintVisible = await page.locator(SEL.hintText).isVisible().catch(() => false);
-    if (hintVisible) return true;
+    // Vent på EDITOR_READY (laste-overlay forsvinner, fallback 3s i appen)
+    await page.waitForTimeout(4000);
 
-    return false;
+    return true;
   } catch {
     return false;
   }
@@ -547,8 +544,30 @@ test.describe('Nettside.ai - Komplett test', () => {
     //  Bruker er innlogget, nettside er generert.
     //  Innhold redigeres i iframe (editor-iframe).
     //  Knapper og modaler er i hovedsiden.
+    //  VIKTIG: Kladd-dialogen MÅ lukkes først!
     //
     // ================================================================
+
+    // Lukk Kladd-dialogen (den er modal og blokkerer alt)
+    stegStart = Date.now();
+    try {
+      // Prøv Lukk-knapp først, deretter Escape
+      const lukkBtn = page.locator('[role="dialog"] button:has-text("Lukk")').first();
+      const lukkVisible = await lukkBtn.isVisible().catch(() => false);
+      if (lukkVisible) {
+        await lukkBtn.click();
+      } else {
+        await page.keyboard.press('Escape');
+      }
+      await page.waitForTimeout(1000);
+      await collectToasts(page, logs);
+      result.steg.push({ navn: 'Steg 8b: Lukk kladd-dialog', status: 'OK', melding: 'Dialog lukket', tidBrukt: Date.now() - stegStart });
+    } catch (error) {
+      // Ikke kritisk — dialogen er kanskje allerede lukket
+      await page.keyboard.press('Escape').catch(() => {});
+      await page.waitForTimeout(500);
+      result.steg.push({ navn: 'Steg 8b: Lukk kladd-dialog', status: 'OK', melding: 'Ingen dialog å lukke', tidBrukt: Date.now() - stegStart });
+    }
 
     // ========================================
     // STEG 9: Tekstredigering

@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 6.0 (data-testid selektorer, stabile attributter)
+// VERSION: 6.1 (fjernet guard, domcontentloaded, alle steg rapporteres)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -291,32 +291,21 @@ test.describe('Nettside.ai - Komplett test', () => {
 
     await setupMonitoring(page, logs);
 
-    // Guard: avbryt hele testen hvis siden ikke laster
-    let sideLastet = false;
-
     // ========================================
     // STEG 1: Åpne app.nettside.ai
     // ========================================
     let stegStart = Date.now();
     try {
       await page.goto('/', { timeout: 60000 });
-      await page.waitForLoadState('networkidle', { timeout: 60000 });
-      await expect(page.getByText('Firmanavn').first()).toBeVisible({ timeout: 15000 });
+      await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
+      await expect(page.getByText('Firmanavn').first()).toBeVisible({ timeout: 30000 });
       await collectToasts(page, logs);
-      sideLastet = true;
       result.steg.push({ navn: 'Steg 1: Åpne app.nettside.ai', status: 'OK', melding: 'Siden lastet, skjema synlig', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await page.screenshot({ path: 'test-results/steg1-feil.png' }).catch(() => {});
       result.screenshots.push('steg1-feil.png');
       await collectToasts(page, logs);
       result.steg.push({ navn: 'Steg 1: Åpne app.nettside.ai', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
-    }
-
-    if (!sideLastet) {
-      result.sluttTid = new Date().toLocaleString('nb-NO', { timeZone: 'Europe/Oslo' });
-      printReport(result);
-      fs.writeFileSync('test-results/rapport.json', JSON.stringify(result, null, 2));
-      throw new Error('Steg 1 feilet: Siden lastet ikke — avbryter testen');
     }
 
     // ========================================

@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 6.8 (waitForFunction readyState, dispatchEvent for iframe-bilder)
+// VERSION: 6.9 (robust dialog-lukking: testid → Escape med fokus → overlay-klikk)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -433,21 +433,33 @@ test.describe('Nettside.ai - Komplett test', () => {
     // Lukk kladd-dialogen
     stegStart = Date.now();
     try {
-      // Vent litt så dialogen er ferdig rendret
       await page.waitForTimeout(2000);
 
-      const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
-      if (dialogOpen) {
-        console.log('   🔲 Kladd-dialog åpen, lukker...');
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
+        if (!dialogOpen) break;
 
-        // Primær: data-testid med force:true (omgår overlay/spinner)
+        console.log(`   🔲 Kladd-dialog åpen, forsøk ${attempt + 1}...`);
+
+        // 1. Prøv data-testid knapp med force:true
         const closeBtn = page.locator(SEL.closeDraftDialog);
         if (await closeBtn.isVisible().catch(() => false)) {
-          await closeBtn.click({ force: true, timeout: 5000 });
+          await closeBtn.click({ force: true, timeout: 5000 }).catch(() => {});
           await page.waitForTimeout(1000);
-        } else {
-          // Fallback: Escape (Radix Dialog støtter dette)
-          await page.keyboard.press('Escape');
+          continue;
+        }
+
+        // 2. Sett fokus på hovedsiden (ikke iframe) og trykk Escape
+        await page.locator('body').click({ position: { x: 1, y: 1 }, force: true }).catch(() => {});
+        await page.waitForTimeout(300);
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(1000);
+
+        // 3. Hvis fortsatt åpen — klikk utenfor dialogen (overlay)
+        const stillThere = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
+        if (stillThere) {
+          // Klikk øverst til venstre i viewporten (utenfor dialogen)
+          await page.mouse.click(1, 1);
           await page.waitForTimeout(1000);
         }
       }

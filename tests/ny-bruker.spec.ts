@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 6.7 (data-testid close-draft-dialog, force:true, Escape fallback)
+// VERSION: 6.8 (waitForFunction readyState, dispatchEvent for iframe-bilder)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -129,7 +129,16 @@ async function enterEditMode(page: Page): Promise<boolean> {
     await expect(page.locator(SEL.editButton)).toBeVisible({ timeout: 10000 });
     await page.locator(SEL.editButton).click();
     await expect(page.locator(SEL.editorIframe)).toBeVisible({ timeout: 10000 });
-    await page.waitForTimeout(4000);
+
+    // Vent på at editor-iframe er ferdig lastet (readyState complete)
+    await page.waitForFunction(() => {
+      const iframe = document.querySelector('[data-testid="editor-iframe"]') as HTMLIFrameElement;
+      return iframe?.contentDocument?.readyState === 'complete';
+    }, { timeout: 15000 });
+
+    // Ekstra delay for at editor-scriptet skal attache click-handlers på bilder
+    await page.waitForTimeout(3000);
+
     return true;
   } catch { return false; }
 }
@@ -149,7 +158,7 @@ function getEditorIframe(page: Page): FrameLocator {
   return page.frameLocator(SEL.editorIframe);
 }
 
-// v6.6: Robust - fallback til bilde #0 hvis skipCount > antall bilder
+// v6.8: dispatchEvent('click') for postMessage-basert bildeklikk i iframe
 async function openImageModal(page: Page, skipCount: number = 0): Promise<boolean> {
   try {
     const iframe = getEditorIframe(page);
@@ -175,12 +184,23 @@ async function openImageModal(page: Page, skipCount: number = 0): Promise<boolea
     for (const i of order) {
       const box = await clickable[i].boundingBox().catch(() => null);
       console.log(`   📷 Klikker bilde #${i}: ${box ? Math.round(box.width) + 'x' + Math.round(box.height) : '?'}`);
-      await clickable[i].click();
+
+      // Bruk dispatchEvent — iframe editor-scriptet bruker postMessage ved click
+      await clickable[i].dispatchEvent('click');
+
       try {
         await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 5000 });
         return true;
       } catch {
-        console.log('   ⚠️ Modal åpnet ikke, prøver neste...');
+        // Fallback: prøv vanlig .click()
+        console.log('   ⚠️ dispatchEvent virket ikke, prøver .click()...');
+        await clickable[i].click();
+        try {
+          await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 3000 });
+          return true;
+        } catch {
+          console.log('   ⚠️ Modal åpnet ikke, prøver neste bilde...');
+        }
       }
     }
     console.log('   ❌ Ingen bilder åpnet modalen');

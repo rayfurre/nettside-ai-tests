@@ -1,4 +1,4 @@
-# VERSION: 2.4
+# VERSION: 2.5
 name: Daglig E2E Test - Nettside.ai
 
 on:
@@ -222,7 +222,7 @@ jobs:
             -H "Authorization: Bearer ${EMAILIT_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
-              --arg from "Nettside.ai Test <kundesenter@nettside.ai>" \
+              --arg from "Kundesenter <kundesenter@nettside.ai>" \
               --arg to "kundesenter@nettside.ai" \
               --arg subject "${{ steps.email.outputs.status }} - Nettside.ai test (${{ steps.email.outputs.date }})" \
               --arg html "$HTML_BODY" \

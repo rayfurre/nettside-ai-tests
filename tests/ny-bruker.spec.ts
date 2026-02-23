@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 6.6 (.catch() på waitForTimeout, robust openImageModal)
+// VERSION: 6.7 (data-testid close-draft-dialog, force:true, Escape fallback)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -61,6 +61,7 @@ const SEL = {
   updateButton:       '[data-testid="update-button"]',
   draftButton:        '[data-testid="draft-button"]',
   publishButton:      '[data-testid="publish-button"]',
+  closeDraftDialog:   '[data-testid="close-draft-dialog"]',
 };
 
 // ===================================================
@@ -412,18 +413,28 @@ test.describe('Nettside.ai - Komplett test', () => {
     // Lukk kladd-dialogen
     stegStart = Date.now();
     try {
-      for (let i = 0; i < 3; i++) {
-        if (!(await page.locator('[role="dialog"]').first().isVisible().catch(() => false))) break;
-        console.log(`   🔲 Dialog åpen, forsøk ${i+1} å lukke...`);
-        const lukkBtn = page.locator('[role="dialog"] button:has-text("Lukk"), [role="dialog"] button:has-text("Close"), [role="dialog"] button:has-text("OK")').first();
-        if (await lukkBtn.isVisible().catch(() => false)) { await lukkBtn.click(); await page.waitForTimeout(1000); continue; }
-        const closeX = page.locator('[role="dialog"] button[aria-label="Close"], [role="dialog"] button:has(svg)').first();
-        if (await closeX.isVisible().catch(() => false)) { await closeX.click(); await page.waitForTimeout(1000); continue; }
-        await page.keyboard.press('Escape'); await page.waitForTimeout(1000);
+      // Vent litt så dialogen er ferdig rendret
+      await page.waitForTimeout(2000);
+
+      const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
+      if (dialogOpen) {
+        console.log('   🔲 Kladd-dialog åpen, lukker...');
+
+        // Primær: data-testid med force:true (omgår overlay/spinner)
+        const closeBtn = page.locator(SEL.closeDraftDialog);
+        if (await closeBtn.isVisible().catch(() => false)) {
+          await closeBtn.click({ force: true, timeout: 5000 });
+          await page.waitForTimeout(1000);
+        } else {
+          // Fallback: Escape (Radix Dialog støtter dette)
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(1000);
+        }
       }
+
       const stillOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
       await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 8b: Lukk dialog', status: stillOpen ? 'FEILET' : 'OK', melding: stillOpen ? 'Dialog fortsatt åpen!' : 'Alle dialoger lukket', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 8b: Lukk dialog', status: stillOpen ? 'FEILET' : 'OK', melding: stillOpen ? 'Dialog fortsatt åpen!' : 'Dialog lukket', tidBrukt: Date.now() - stegStart });
       if (stillOpen) { await page.screenshot({ path: 'test-results/steg8b-dialog-aapen.png' }).catch(() => {}); result.screenshots.push('steg8b-dialog-aapen.png'); }
     } catch (error) {
       await page.keyboard.press('Escape').catch(() => {});

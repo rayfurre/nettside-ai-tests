@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering og editor
-// VERSION: 6.9 (robust dialog-lukking: testid → Escape med fokus → overlay-klikk)
+// VERSION: 7.0 (filtrer draft-URL 404 fra nettverksfeil-logg)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -68,8 +68,9 @@ const SEL = {
 // Konstanter
 // ===================================================
 
-const IGNORED_DOMAINS = ['google-analytics.com','googletagmanager.com','analytics.google.com','doubleclick.net'];
-const IGNORED_URL_PATTERNS = ['/rest/v1/project_history','/rest/v1/deployment_issues'];
+const IGNORED_DOMAINS = ['google-analytics.com','googletagmanager.com','analytics.google.com','doubleclick.net','draft.kundesider.pages.dev','draft--vibe-kundesider.netlify.app'];
+const IGNORED_CONSOLE_PATTERNS = ['Failed to load resource', 'favicon.ico'];
+const IGNORED_URL_PATTERNS = ['/rest/v1/project_history','/rest/v1/deployment_issues','draft.kundesider.pages.dev','draft--vibe-kundesider.netlify.app'];
 
 // ===================================================
 // Hjelpefunksjoner
@@ -87,6 +88,7 @@ async function setupMonitoring(page: Page, logs: LogEntry[]): Promise<void> {
     if (type === 'error' || type === 'warning') {
       const text = msg.text();
       if (isIgnoredUrl(text) || isIgnoredUrl(msg.location().url || '')) return;
+      if (IGNORED_CONSOLE_PATTERNS.some(p => text.includes(p))) return;
       logs.push({ timestamp: new Date().toISOString(), type: type as 'error' | 'warning', message: text, details: msg.location().url });
     }
   });

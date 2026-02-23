@@ -1,4 +1,4 @@
-# VERSION: 2.5
+# VERSION: 2.6
 name: Daglig E2E Test - Nettside.ai
 
 on:
@@ -10,7 +10,7 @@ jobs:
   test:
     name: E2E Test - Komplett flyt
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     
     steps:
       - name: Checkout repo

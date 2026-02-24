@@ -3,7 +3,7 @@ name: Daglig E2E Test - Nettside.ai
 
 on:
   schedule:
-    - cron: '0 7 * * *'  # 08:00 norsk tid (07:00 UTC)
+    - cron: '0 7 * * *'  # 07:00 norsk tid (07:00 UTC)
   workflow_dispatch:      # Manuell kjøring
 
 jobs:

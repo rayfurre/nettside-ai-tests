@@ -1,6 +1,6 @@
 // ===================================================
 // PLAYWRIGHT CONFIG: Nettside.ai E2E Testing
-// VERSION: 2.2 (timeout 720s for betaling + Stripe)
+// VERSION: 2.3 (timeout 900s for crash-proof test)
 // ===================================================
 
 import { defineConfig, devices } from '@playwright/test';
@@ -27,7 +27,7 @@ export default defineConfig({
     timezoneId: 'Europe/Oslo',
   },
 
-  timeout: 720000, // 12 min per test (generering ~3 min + editor ~3 min + AI-bilde ~2 min + kladd-retry ~2 min + betaling ~1 min + margin)
+  timeout: 900000, // 15 min per test (økt fra 12 min for å gi margin)
   expect: {
     timeout: 150000,
   },

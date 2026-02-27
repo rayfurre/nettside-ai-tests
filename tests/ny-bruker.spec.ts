@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.3 (crash-proof: alle steg i try/catch, page-sjekk)
+// VERSION: 7.4 (fix: force-click body i steg 9b + dismissUnexpectedDialog)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -218,6 +218,23 @@ async function safeScreenshot(page: Page, filePath: string, fullPage: boolean = 
   try {
     if (isPageAlive(page)) await page.screenshot({ path: filePath, fullPage });
   } catch {}
+}
+
+/** v7.4: Lukk uventede dialoger (f.eks. bilde-modal som trigges ved utilsiktet klikk i iframe) */
+async function dismissUnexpectedDialog(page: Page): Promise<boolean> {
+  try {
+    if (!isPageAlive(page)) return false;
+    const imageDialogOpen = await page.locator(SEL.imageDialog).isVisible().catch(() => false);
+    if (imageDialogOpen) {
+      console.log('   ⚠️ Uventet bilde-dialog oppdaget, lukker med Escape...');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(500);
+      const stillOpen = await page.locator(SEL.imageDialog).isVisible().catch(() => false);
+      if (stillOpen) { await page.mouse.click(1, 1); await page.waitForTimeout(500); }
+      return true;
+    }
+    return false;
+  } catch { return false; }
 }
 
 function printReport(result: TestResult): void {
@@ -513,7 +530,11 @@ test.describe('Nettside.ai - Komplett test', () => {
       for (const tag of ['h1','h2']) { const h = iframe.locator(tag).first(); if (await h.isVisible().catch(() => false)) { await h.click(); await page.waitForTimeout(1500); clicked = true; break; } }
       if (!clicked) throw new Error('Ingen overskrift funnet');
       await page.keyboard.press('Control+A'); await page.keyboard.type(testTekst);
-      await iframe.locator('body').click({ position: { x: 10, y: 10 } }); await page.waitForTimeout(2000); await collectToasts(page, logs);
+      // v7.4: force:true for å unngå hang når bilde-dialog intercepter pointer events
+      await iframe.locator('body').click({ position: { x: 10, y: 10 }, force: true }); await page.waitForTimeout(1000);
+      // v7.4: Lukk bilde-dialog hvis den åpnet seg utilsiktet
+      await dismissUnexpectedDialog(page);
+      await page.waitForTimeout(1000); await collectToasts(page, logs);
       await safeScreenshot(page, 'test-results/steg9b-tekst-endret.png'); result.screenshots.push('steg9b-tekst-endret.png');
       result.steg.push({ navn: 'Steg 9b: Endre overskrift', status: 'OK', melding: `Tekst: "${testTekst}"`, tidBrukt: Date.now() - stegStart });
     } catch (error) {
@@ -724,7 +745,6 @@ test.describe('Nettside.ai - Komplett test', () => {
       await expect(page.locator(SEL.generateAiBtn)).toBeVisible({ timeout: 5000 }); await page.locator(SEL.generateAiBtn).click();
       console.log('   ⏳ Venter på AI-bildegenerering (maks 60s)...');
       let elapsed = 0; let done = false;
-      // Redusert fra 90s til 60s for å unngå timeout
       while (!done && elapsed < 60000) {
         if (!isPageAlive(page)) break;
         await page.waitForTimeout(3000); elapsed += 3000; await collectToasts(page, logs);

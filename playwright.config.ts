@@ -1,6 +1,6 @@
 // ===================================================
 // PLAYWRIGHT CONFIG: Nettside.ai E2E Testing
-// VERSION: 2.3 (timeout 900s for crash-proof test)
+// VERSION: 2.4 (timeout 900s for crash-proof test)
 // ===================================================
 
 import { defineConfig, devices } from '@playwright/test';
@@ -9,7 +9,7 @@ export default defineConfig({
   testDir: './tests',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  retries: 0,
   workers: 1,
   
   reporter: [

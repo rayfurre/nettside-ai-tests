@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.5 (fjernet kladd-steg, publish-button som ferdig-signal)
+// VERSION: 7.6 (dialog-dismiss tilbake mellom generering og editor)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -225,6 +225,31 @@ async function dismissUnexpectedDialog(page: Page): Promise<boolean> {
   } catch { return false; }
 }
 
+/** v7.6: Lukk alle åpne dialoger og toasts */
+async function dismissAllDialogs(page: Page): Promise<void> {
+  try {
+    if (!isPageAlive(page)) return;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!isPageAlive(page)) break;
+      const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
+      if (!dialogOpen) break;
+      console.log(`   🔲 Dialog åpen, forsøk ${attempt + 1}...`);
+      await page.keyboard.press('Escape').catch(() => {});
+      await page.waitForTimeout(1000).catch(() => {});
+      const stillThere = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
+      if (stillThere) {
+        await page.mouse.click(1, 1).catch(() => {});
+        await page.waitForTimeout(1000).catch(() => {});
+      }
+    }
+    // Lukk eventuelle sonner-toasts som kan blokkere
+    const closeButtons = await page.locator('[data-sonner-toast] button[aria-label="Close"]').all().catch(() => []);
+    for (const btn of closeButtons) {
+      await btn.click({ force: true }).catch(() => {});
+    }
+  } catch {}
+}
+
 function printReport(result: TestResult): void {
   console.log('\n' + '='.repeat(70));
   console.log('📊 TESTRAPPORT - NETTSIDE.AI');
@@ -348,7 +373,6 @@ test.describe('Nettside.ai - Komplett test', () => {
 
     // ========================================
     // STEG 5: Vent på generering (~3 min)
-    // Bruker publish-button som ferdig-signal
     // ========================================
     stegStart = Date.now();
     let genereringFullfort = false;
@@ -374,6 +398,12 @@ test.describe('Nettside.ai - Komplett test', () => {
       await safeScreenshot(page, 'test-results/steg5-feil.png', true); result.screenshots.push('steg5-feil.png');
       result.steg.push({ navn: 'Steg 5: Vent på generering', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
+
+    // ========================================
+    // v7.6: Rydd opp dialoger/toasts etter generering
+    // ========================================
+    await dismissAllDialogs(page);
+    await collectToasts(page, logs);
 
     // ================================================================
     // EDITOR-TESTER (steg 6-9)
@@ -669,7 +699,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       }
     } catch {}
 
-    // 10a: Klikk Publiser-knappen i ActionBar
+    // 10a: Klikk Publiser
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
@@ -686,7 +716,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 10a: Klikk Publiser', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 10b: Verifiser at pristabellen vises
+    // 10b: Verifiser pristabellen
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
@@ -703,7 +733,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 10b: Pristabellen vises', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 10c: Klikk "Velg Pro" og verifiser at Stripe checkout åpnes
+    // 10c: Velg Pro → Stripe
     stegStart = Date.now();
     let stripePage: Page | null = null;
     try {
@@ -722,9 +752,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       await safeScreenshot(page, 'test-results/steg10c-etter-klikk.png');
       result.screenshots.push('steg10c-etter-klikk.png');
       const isStripe = stripeUrl.includes('checkout.stripe.com');
-      if (!isStripe) {
-        throw new Error(`Forventet checkout.stripe.com, fikk: ${stripeUrl}`);
-      }
+      if (!isStripe) throw new Error(`Forventet checkout.stripe.com, fikk: ${stripeUrl}`);
       result.steg.push({ navn: 'Steg 10c: Velg Pro → Stripe', status: 'OK', melding: `Stripe checkout åpnet: ${stripeUrl.substring(0, 60)}...`, tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await safeScreenshot(page, 'test-results/steg10c-feil.png');
@@ -732,7 +760,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 10c: Velg Pro → Stripe', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // 10d: Verifiser Stripe checkout-innhold
+    // 10d: Verifiser Stripe checkout
     stegStart = Date.now();
     try {
       if (!stripePage || stripePage.isClosed()) throw new Error('Stripe-fane ikke tilgjengelig');
@@ -751,9 +779,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({
         navn: 'Steg 10d: Verifiser Stripe checkout',
         status: success ? 'OK' : 'FEILET',
-        melding: success
-          ? `Stripe checkout OK: ${details.join(', ')}`
-          : `Mangler innhold: Abonner=${hasSubscribeBtn}, Pro=${hasProText}`,
+        melding: success ? `Stripe checkout OK: ${details.join(', ')}` : `Mangler innhold: Abonner=${hasSubscribeBtn}, Pro=${hasProText}`,
         tidBrukt: Date.now() - stegStart
       });
       await stripePage.close().catch(() => {});

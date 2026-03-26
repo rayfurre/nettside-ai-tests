@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.8 (normal click etter toast-fjerning, retry i enterEditMode)
+// VERSION: 7.9 (v7.5 + toast-fjerning mellom generering og editor)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -120,28 +120,15 @@ async function collectToasts(page: Page, logs: LogEntry[]): Promise<void> {
   }
 }
 
-/** v7.7: Fjern ALLE toasts fra DOM via JavaScript */
+/** v7.9: Fjern alle toasts fra DOM så de ikke blokkerer UI-elementer */
 async function dismissAllToasts(page: Page): Promise<void> {
   try {
     if (!isPageAlive(page)) return;
-
-    // 1. Klikk Close-knapper på toasts som har dem
-    const closeButtons = await page.locator('[data-sonner-toast] button[aria-label="Close"], [data-sonner-toast] button[data-close]').all().catch(() => []);
-    for (const btn of closeButtons) {
-      await btn.click({ force: true }).catch(() => {});
-    }
-    await page.waitForTimeout(500);
-
-    // 2. Fjern gjenværende toasts direkte fra DOM
     const removed = await page.evaluate(() => {
-      const selectors = ['[data-sonner-toaster]', '[data-sonner-toast]', '.sonner-toast', '[role="status"][data-sonner-toast]'];
       let count = 0;
-      for (const sel of selectors) {
-        document.querySelectorAll(sel).forEach(el => { el.remove(); count++; });
-      }
+      document.querySelectorAll('[data-sonner-toaster], [data-sonner-toast]').forEach(el => { el.remove(); count++; });
       return count;
     }).catch(() => 0);
-
     if (removed > 0) console.log(`   🧹 Fjernet ${removed} toast-elementer fra DOM`);
     await page.waitForTimeout(500);
   } catch {}
@@ -154,72 +141,20 @@ function createTestImage(): string {
   return path.resolve(p);
 }
 
-/** v7.8: enterEditMode med retry-logikk og normal klikk etter toast-fjerning */
 async function enterEditMode(page: Page): Promise<boolean> {
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      if (!isPageAlive(page)) return false;
-      console.log(`   🔧 enterEditMode forsøk ${attempt}/3: Venter på preview-iframe...`);
-
-      // Sjekk om vi allerede er i redigeringsmodus
-      const alreadyEditing = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
-      if (alreadyEditing) {
-        console.log('   🔧 enterEditMode: Allerede i redigeringsmodus');
-        return true;
-      }
-
-      await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 30000 });
-      console.log('   🔧 enterEditMode: Preview-iframe synlig');
-
-      // Fjern toasts som kan blokkere
-      await dismissAllToasts(page);
-      await page.waitForTimeout(500);
-
-      // Sjekk at edit-knapp er synlig
-      const editBtn = page.locator(SEL.editButton);
-      await expect(editBtn).toBeVisible({ timeout: 10000 });
-      console.log('   🔧 enterEditMode: Edit-knapp synlig, klikker...');
-
-      // Normal klikk (ikke force) - appen må registrere det ordentlig
-      await editBtn.click();
-      await page.waitForTimeout(2000);
-
-      // Sjekk om editor-iframe dukket opp
-      const editorVisible = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
-      if (editorVisible) {
-        console.log('   🔧 enterEditMode: Editor-iframe synlig');
-        await page.waitForFunction(() => {
-          const iframe = document.querySelector('[data-testid="editor-iframe"]') as HTMLIFrameElement;
-          try { return iframe?.contentDocument?.readyState === 'complete'; } catch { return true; }
-        }, { timeout: 15000 });
-        await page.waitForTimeout(3000);
-        console.log('   🔧 enterEditMode: OK');
-        return true;
-      }
-
-      // Editor-iframe ikke synlig, sjekk alternativt om redigeringsmodus er aktiv via andre indikatorer
-      const cancelVisible = await page.locator(SEL.cancelEditButton).isVisible().catch(() => false);
-      const hintVisible = await page.locator(SEL.hintText).isVisible().catch(() => false);
-      if (cancelVisible || hintVisible) {
-        console.log('   🔧 enterEditMode: Redigeringsmodus aktiv (Avbryt/hint synlig), venter på editor-iframe...');
-        try {
-          await expect(page.locator(SEL.editorIframe)).toBeVisible({ timeout: 15000 });
-          await page.waitForTimeout(3000);
-          console.log('   🔧 enterEditMode: OK (etter venting)');
-          return true;
-        } catch {
-          console.log('   🔧 enterEditMode: Editor-iframe dukket ikke opp til tross for redigeringsmodus');
-        }
-      }
-
-      console.log(`   🔧 enterEditMode forsøk ${attempt}: Klikk registrert ikke, prøver igjen...`);
-      await page.waitForTimeout(2000);
-    } catch (error) {
-      console.log(`   🔧 enterEditMode forsøk ${attempt}: FEILET - ${error}`);
-    }
-  }
-  console.log('   🔧 enterEditMode: Alle 3 forsøk feilet');
-  return false;
+  try {
+    if (!isPageAlive(page)) return false;
+    await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 30000 });
+    await expect(page.locator(SEL.editButton)).toBeVisible({ timeout: 10000 });
+    await page.locator(SEL.editButton).click();
+    await expect(page.locator(SEL.editorIframe)).toBeVisible({ timeout: 10000 });
+    await page.waitForFunction(() => {
+      const iframe = document.querySelector('[data-testid="editor-iframe"]') as HTMLIFrameElement;
+      return iframe?.contentDocument?.readyState === 'complete';
+    }, { timeout: 15000 });
+    await page.waitForTimeout(3000);
+    return true;
+  } catch { return false; }
 }
 
 async function saveEditorChanges(page: Page): Promise<boolean> {
@@ -302,27 +237,6 @@ async function dismissUnexpectedDialog(page: Page): Promise<boolean> {
     }
     return false;
   } catch { return false; }
-}
-
-/** Lukk alle åpne dialoger og toasts */
-async function dismissAllDialogs(page: Page): Promise<void> {
-  try {
-    if (!isPageAlive(page)) return;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (!isPageAlive(page)) break;
-      const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
-      if (!dialogOpen) break;
-      console.log(`   🔲 Dialog åpen, forsøk ${attempt + 1}...`);
-      await page.keyboard.press('Escape').catch(() => {});
-      await page.waitForTimeout(1000).catch(() => {});
-      const stillThere = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
-      if (stillThere) {
-        await page.mouse.click(1, 1).catch(() => {});
-        await page.waitForTimeout(1000).catch(() => {});
-      }
-    }
-    await dismissAllToasts(page);
-  } catch {}
 }
 
 function printReport(result: TestResult): void {
@@ -475,11 +389,10 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     // ========================================
-    // v7.8: Rydd opp dialoger/toasts etter generering
+    // v7.9: Fjern toasts som blokkerer edit-knappen
     // ========================================
-    await dismissAllDialogs(page);
-    await dismissAllToasts(page);
     await collectToasts(page, logs);
+    await dismissAllToasts(page);
 
     // ================================================================
     // EDITOR-TESTER (steg 6-9)
@@ -779,7 +692,6 @@ test.describe('Nettside.ai - Komplett test', () => {
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
-      await dismissAllToasts(page);
       await expect(page.locator(SEL.publishButton)).toBeVisible({ timeout: 15000 });
       await page.locator(SEL.publishButton).click();
       await page.waitForTimeout(2000);

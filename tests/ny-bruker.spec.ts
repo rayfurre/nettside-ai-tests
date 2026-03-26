@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.9 (v7.5 + toast-fjerning mellom generering og editor)
+// VERSION: 7.10 (v7.5 + lukk tips-dialog og toasts mellom generering og editor)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -120,10 +120,28 @@ async function collectToasts(page: Page, logs: LogEntry[]): Promise<void> {
   }
 }
 
-/** v7.9: Fjern alle toasts fra DOM så de ikke blokkerer UI-elementer */
-async function dismissAllToasts(page: Page): Promise<void> {
+/** v7.10: Lukk tips-dialog og fjern alle toasts */
+async function dismissDialogsAndToasts(page: Page): Promise<void> {
   try {
     if (!isPageAlive(page)) return;
+
+    // 1. Lukk "Tips til en bedre nettside"-dialogen
+    const kanskjeSenere = page.locator('button', { hasText: 'Kanskje senere' });
+    if (await kanskjeSenere.isVisible().catch(() => false)) {
+      console.log('   🔲 Lukker tips-dialog med "Kanskje senere"...');
+      await kanskjeSenere.click();
+      await page.waitForTimeout(1000);
+    } else {
+      // Fallback: lukk via X-knapp eller Escape
+      const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
+      if (dialogOpen) {
+        console.log('   🔲 Dialog åpen, lukker med Escape...');
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(1000);
+      }
+    }
+
+    // 2. Fjern alle toasts fra DOM
     const removed = await page.evaluate(() => {
       let count = 0;
       document.querySelectorAll('[data-sonner-toaster], [data-sonner-toast]').forEach(el => { el.remove(); count++; });
@@ -389,10 +407,10 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     // ========================================
-    // v7.9: Fjern toasts som blokkerer edit-knappen
+    // v7.10: Lukk tips-dialog og fjern toasts
     // ========================================
     await collectToasts(page, logs);
-    await dismissAllToasts(page);
+    await dismissDialogsAndToasts(page);
 
     // ================================================================
     // EDITOR-TESTER (steg 6-9)

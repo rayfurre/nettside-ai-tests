@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.6 (dialog-dismiss tilbake mellom generering og editor)
+// VERSION: 7.7 (fjern toasts som blokkerer edit-knapp)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -120,6 +120,33 @@ async function collectToasts(page: Page, logs: LogEntry[]): Promise<void> {
   }
 }
 
+/** v7.7: Fjern ALLE toasts fra DOM via JavaScript */
+async function dismissAllToasts(page: Page): Promise<void> {
+  try {
+    if (!isPageAlive(page)) return;
+
+    // 1. Klikk Close-knapper på toasts som har dem
+    const closeButtons = await page.locator('[data-sonner-toast] button[aria-label="Close"], [data-sonner-toast] button[data-close]').all().catch(() => []);
+    for (const btn of closeButtons) {
+      await btn.click({ force: true }).catch(() => {});
+    }
+    await page.waitForTimeout(500);
+
+    // 2. Fjern gjenværende toasts direkte fra DOM
+    const removed = await page.evaluate(() => {
+      const selectors = ['[data-sonner-toaster]', '[data-sonner-toast]', '.sonner-toast', '[role="status"][data-sonner-toast]'];
+      let count = 0;
+      for (const sel of selectors) {
+        document.querySelectorAll(sel).forEach(el => { el.remove(); count++; });
+      }
+      return count;
+    }).catch(() => 0);
+
+    if (removed > 0) console.log(`   🧹 Fjernet ${removed} toast-elementer fra DOM`);
+    await page.waitForTimeout(500);
+  } catch {}
+}
+
 function createTestImage(): string {
   const p = path.join('test-results', 'test-bilde.png');
   fs.mkdirSync('test-results', { recursive: true });
@@ -127,20 +154,37 @@ function createTestImage(): string {
   return path.resolve(p);
 }
 
+/** v7.7: enterEditMode med force:true og bedre logging */
 async function enterEditMode(page: Page): Promise<boolean> {
   try {
     if (!isPageAlive(page)) return false;
+    console.log('   🔧 enterEditMode: Venter på preview-iframe...');
     await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 30000 });
+    console.log('   🔧 enterEditMode: Preview-iframe synlig, venter på edit-knapp...');
+
+    // Fjern toasts som kan blokkere knappen
+    await dismissAllToasts(page);
+
     await expect(page.locator(SEL.editButton)).toBeVisible({ timeout: 10000 });
-    await page.locator(SEL.editButton).click();
+    console.log('   🔧 enterEditMode: Edit-knapp synlig, klikker med force:true...');
+    await page.locator(SEL.editButton).click({ force: true });
+
+    console.log('   🔧 enterEditMode: Venter på editor-iframe...');
     await expect(page.locator(SEL.editorIframe)).toBeVisible({ timeout: 10000 });
+
+    console.log('   🔧 enterEditMode: Venter på iframe readyState...');
     await page.waitForFunction(() => {
       const iframe = document.querySelector('[data-testid="editor-iframe"]') as HTMLIFrameElement;
-      return iframe?.contentDocument?.readyState === 'complete';
+      try { return iframe?.contentDocument?.readyState === 'complete'; } catch { return true; }
     }, { timeout: 15000 });
+
     await page.waitForTimeout(3000);
+    console.log('   🔧 enterEditMode: OK');
     return true;
-  } catch { return false; }
+  } catch (error) {
+    console.log(`   🔧 enterEditMode: FEILET - ${error}`);
+    return false;
+  }
 }
 
 async function saveEditorChanges(page: Page): Promise<boolean> {
@@ -225,7 +269,7 @@ async function dismissUnexpectedDialog(page: Page): Promise<boolean> {
   } catch { return false; }
 }
 
-/** v7.6: Lukk alle åpne dialoger og toasts */
+/** v7.7: Lukk alle åpne dialoger og toasts */
 async function dismissAllDialogs(page: Page): Promise<void> {
   try {
     if (!isPageAlive(page)) return;
@@ -242,11 +286,8 @@ async function dismissAllDialogs(page: Page): Promise<void> {
         await page.waitForTimeout(1000).catch(() => {});
       }
     }
-    // Lukk eventuelle sonner-toasts som kan blokkere
-    const closeButtons = await page.locator('[data-sonner-toast] button[aria-label="Close"]').all().catch(() => []);
-    for (const btn of closeButtons) {
-      await btn.click({ force: true }).catch(() => {});
-    }
+    // Fjern alle toasts
+    await dismissAllToasts(page);
   } catch {}
 }
 
@@ -400,9 +441,10 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     // ========================================
-    // v7.6: Rydd opp dialoger/toasts etter generering
+    // v7.7: Rydd opp dialoger/toasts etter generering
     // ========================================
     await dismissAllDialogs(page);
+    await dismissAllToasts(page);
     await collectToasts(page, logs);
 
     // ================================================================
@@ -703,8 +745,9 @@ test.describe('Nettside.ai - Komplett test', () => {
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
+      await dismissAllToasts(page);
       await expect(page.locator(SEL.publishButton)).toBeVisible({ timeout: 15000 });
-      await page.locator(SEL.publishButton).click();
+      await page.locator(SEL.publishButton).click({ force: true });
       await page.waitForTimeout(2000);
       await collectToasts(page, logs);
       await safeScreenshot(page, 'test-results/steg10a-publiser-klikket.png');

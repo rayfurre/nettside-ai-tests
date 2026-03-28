@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.11 (data-testid for dismiss av dialog/toast + 5s vent etter generering)
+// VERSION: 7.12 (dismissDialogsAndToasts i enterEditMode + retry)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -178,19 +178,33 @@ function createTestImage(): string {
 }
 
 async function enterEditMode(page: Page): Promise<boolean> {
-  try {
-    if (!isPageAlive(page)) return false;
-    await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 30000 });
-    await expect(page.locator(SEL.editButton)).toBeVisible({ timeout: 10000 });
-    await page.locator(SEL.editButton).click();
-    await expect(page.locator(SEL.editorIframe)).toBeVisible({ timeout: 10000 });
-    await page.waitForFunction(() => {
-      const iframe = document.querySelector('[data-testid="editor-iframe"]') as HTMLIFrameElement;
-      return iframe?.contentDocument?.readyState === 'complete';
-    }, { timeout: 15000 });
-    await page.waitForTimeout(3000);
-    return true;
-  } catch { return false; }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      if (!isPageAlive(page)) return false;
+      console.log(`   🔧 enterEditMode forsøk ${attempt}/3...`);
+      
+      // Dismiss eventuelle toasts/dialoger som blokkerer
+      await dismissDialogsAndToasts(page);
+      
+      await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 30000 });
+      await expect(page.locator(SEL.editButton)).toBeVisible({ timeout: 10000 });
+      await page.locator(SEL.editButton).click();
+      await expect(page.locator(SEL.editorIframe)).toBeVisible({ timeout: 10000 });
+      await page.waitForFunction(() => {
+        const iframe = document.querySelector('[data-testid="editor-iframe"]') as HTMLIFrameElement;
+        return iframe?.contentDocument?.readyState === 'complete';
+      }, { timeout: 15000 });
+      await page.waitForTimeout(3000);
+      return true;
+    } catch (error) {
+      console.log(`   ⚠️ enterEditMode forsøk ${attempt} feilet: ${error}`);
+      if (attempt < 3) {
+        await dismissDialogsAndToasts(page);
+        await page.waitForTimeout(2000);
+      }
+    }
+  }
+  return false;
 }
 
 async function saveEditorChanges(page: Page): Promise<boolean> {

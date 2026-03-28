@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.10 (v7.5 + lukk tips-dialog og toasts mellom generering og editor)
+// VERSION: 7.11 (data-testid for dismiss av dialog/toast + 5s vent etter generering)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -41,24 +41,28 @@ interface StepResult {
 // ===================================================
 
 const SEL = {
-  previewIframe:      '[data-testid="preview-iframe"]',
-  editorIframe:       '[data-testid="editor-iframe"]',
-  editButton:         '[data-testid="edit-button"]',
-  saveChangesButton:  '[data-testid="save-changes-button"]',
-  cancelEditButton:   '[data-testid="cancel-edit-button"]',
-  hintText:           '[data-testid="hint-click-text"]',
-  hintImages:         '[data-testid="hint-click-images"]',
-  imageDialog:        '[data-testid="image-edit-dialog"]',
-  tabUpload:          '[data-testid="tab-upload"]',
-  tabUrl:             '[data-testid="tab-url"]',
-  tabAi:              '[data-testid="tab-ai"]',
-  aiPromptInput:      '[data-testid="ai-prompt-input"]',
-  enhancePromptBtn:   '[data-testid="enhance-prompt-button"]',
-  generateAiBtn:      '[data-testid="generate-ai-button"]',
-  useImageBtn:        '[data-testid="use-image-button"]',
-  saveButton:         '[data-testid="save-button"]',
-  updateButton:       '[data-testid="update-button"]',
-  publishButton:      '[data-testid="publish-button"]',
+  previewIframe:        '[data-testid="preview-iframe"]',
+  editorIframe:         '[data-testid="editor-iframe"]',
+  editButton:           '[data-testid="edit-button"]',
+  saveChangesButton:    '[data-testid="save-changes-button"]',
+  cancelEditButton:     '[data-testid="cancel-edit-button"]',
+  hintText:             '[data-testid="hint-click-text"]',
+  hintImages:           '[data-testid="hint-click-images"]',
+  imageDialog:          '[data-testid="image-edit-dialog"]',
+  tabUpload:            '[data-testid="tab-upload"]',
+  tabUrl:               '[data-testid="tab-url"]',
+  tabAi:                '[data-testid="tab-ai"]',
+  aiPromptInput:        '[data-testid="ai-prompt-input"]',
+  enhancePromptBtn:     '[data-testid="enhance-prompt-button"]',
+  generateAiBtn:        '[data-testid="generate-ai-button"]',
+  useImageBtn:          '[data-testid="use-image-button"]',
+  saveButton:           '[data-testid="save-button"]',
+  updateButton:         '[data-testid="update-button"]',
+  publishButton:        '[data-testid="publish-button"]',
+  enhanceDialog:        '[data-testid="enhance-dialog"]',
+  enhanceDialogDismiss: '[data-testid="enhance-dialog-dismiss"]',
+  tipToast:             '[data-testid="tip-toast"]',
+  tipToastDismiss:      '[data-testid="tip-toast-dismiss"]',
 };
 
 // ===================================================
@@ -120,34 +124,48 @@ async function collectToasts(page: Page, logs: LogEntry[]): Promise<void> {
   }
 }
 
-/** v7.10: Lukk tips-dialog og fjern alle toasts */
+/** v7.11: Lukk tips-dialog og tips-toast via data-testid (med fallback) */
 async function dismissDialogsAndToasts(page: Page): Promise<void> {
   try {
     if (!isPageAlive(page)) return;
 
     // 1. Lukk "Tips til en bedre nettside"-dialogen
-    const kanskjeSenere = page.locator('button', { hasText: 'Kanskje senere' });
-    if (await kanskjeSenere.isVisible().catch(() => false)) {
-      console.log('   🔲 Lukker tips-dialog med "Kanskje senere"...');
-      await kanskjeSenere.click();
+    const enhanceDismiss = page.locator(SEL.enhanceDialogDismiss);
+    if (await enhanceDismiss.isVisible({ timeout: 2000 }).catch(() => false)) {
+      console.log('   🔲 Lukker tips-dialog via data-testid...');
+      await enhanceDismiss.click();
       await page.waitForTimeout(1000);
     } else {
-      // Fallback: lukk via X-knapp eller Escape
-      const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
-      if (dialogOpen) {
-        console.log('   🔲 Dialog åpen, lukker med Escape...');
-        await page.keyboard.press('Escape');
+      const kanskjeSenere = page.locator('button', { hasText: 'Kanskje senere' });
+      if (await kanskjeSenere.isVisible().catch(() => false)) {
+        console.log('   🔲 Lukker tips-dialog med "Kanskje senere" (fallback)...');
+        await kanskjeSenere.click();
         await page.waitForTimeout(1000);
+      } else {
+        const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
+        if (dialogOpen) {
+          console.log('   🔲 Dialog åpen, lukker med Escape (fallback)...');
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(1000);
+        }
       }
     }
 
-    // 2. Fjern alle toasts fra DOM
-    const removed = await page.evaluate(() => {
-      let count = 0;
-      document.querySelectorAll('[data-sonner-toaster], [data-sonner-toast]').forEach(el => { el.remove(); count++; });
-      return count;
-    }).catch(() => 0);
-    if (removed > 0) console.log(`   🧹 Fjernet ${removed} toast-elementer fra DOM`);
+    // 2. Lukk tips-toasten
+    const tipDismiss = page.locator(SEL.tipToastDismiss);
+    if (await tipDismiss.isVisible({ timeout: 2000 }).catch(() => false)) {
+      console.log('   🔲 Lukker tips-toast via data-testid...');
+      await tipDismiss.click();
+      await page.waitForTimeout(500);
+    } else {
+      const removed = await page.evaluate(() => {
+        let count = 0;
+        document.querySelectorAll('[data-sonner-toaster], [data-sonner-toast], [aria-label="Notifications (F8)"]').forEach(el => { el.remove(); count++; });
+        return count;
+      }).catch(() => 0);
+      if (removed > 0) console.log(`   🧹 Fjernet ${removed} toast/notification-elementer fra DOM (fallback)`);
+    }
+
     await page.waitForTimeout(500);
   } catch {}
 }
@@ -407,8 +425,9 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     // ========================================
-    // v7.10: Lukk tips-dialog og fjern toasts
+    // v7.11: Vent 5s, samle toasts, dismiss dialog+toast
     // ========================================
+    await page.waitForTimeout(5000);
     await collectToasts(page, logs);
     await dismissDialogsAndToasts(page);
 

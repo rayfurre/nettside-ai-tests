@@ -1,10 +1,17 @@
-# VERSION: 2.7
+# ===================================================
+# WORKFLOW: Daglig E2E Test - Nettside.ai
+# VERSION: 2.8 (fjernet kladd_url fra parsing og e-post)
+# BESKRIVELSE: Kjører Playwright E2E-test daglig kl 08:00 norsk tid,
+#              parser rapport.json og sender e-post via Emailit.
+# TRIGGER: Cron 06:00 UTC (08:00 CEST) + manuell workflow_dispatch
+# ===================================================
+
 name: Daglig E2E Test - Nettside.ai
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # 06:00 norsk tid (07:00 UTC)
-  workflow_dispatch:      # Manuell kjøring
+    - cron: '0 6 * * *'
+  workflow_dispatch:
 
 jobs:
   test:
@@ -50,7 +57,6 @@ jobs:
           if [ -f "test-results/rapport.json" ]; then
             BEDRIFT=$(jq -r '.bedrift' test-results/rapport.json)
             EPOST=$(jq -r '.epost' test-results/rapport.json)
-            KLADD_URL=$(jq -r '.kladdUrl // "Ikke generert"' test-results/rapport.json)
             
             OK=$(jq '[.steg[] | select(.status == "OK")] | length' test-results/rapport.json)
             FEILET=$(jq '[.steg[] | select(.status == "FEILET")] | length' test-results/rapport.json)
@@ -62,7 +68,6 @@ jobs:
             
             echo "bedrift=$BEDRIFT" >> $GITHUB_OUTPUT
             echo "epost=$EPOST" >> $GITHUB_OUTPUT
-            echo "kladd_url=$KLADD_URL" >> $GITHUB_OUTPUT
             echo "ok=$OK" >> $GITHUB_OUTPUT
             echo "feilet=$FEILET" >> $GITHUB_OUTPUT
             
@@ -92,7 +97,6 @@ jobs:
           else
             echo "bedrift=Ukjent" >> $GITHUB_OUTPUT
             echo "epost=Ukjent" >> $GITHUB_OUTPUT
-            echo "kladd_url=Ikke generert" >> $GITHUB_OUTPUT
             echo "ok=0" >> $GITHUB_OUTPUT
             echo "feilet=0" >> $GITHUB_OUTPUT
             echo "feil=Ingen rapport generert" >> $GITHUB_OUTPUT
@@ -168,10 +172,6 @@ jobs:
                   <div class="info-row">
                     <span class="info-label">Test-epost:</span>
                     <span class="info-value">${{ steps.parse.outputs.epost }}</span>
-                  </div>
-                  <div class="info-row">
-                    <span class="info-label">Kladd-URL:</span>
-                    <span class="info-value">${{ steps.parse.outputs.kladd_url }}</span>
                   </div>
                 </div>
                 <div class="section">

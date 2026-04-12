@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.12 (dismissDialogsAndToasts i enterEditMode + retry)
+// VERSION: 7.13 (dismissDialogsAndToasts i enterEditMode + retry)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -361,7 +361,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
       await page.getByPlaceholder('Navnet på din bedrift').fill(bedrift.firmanavn);
-      await page.getByPlaceholder(/Skriv kort hva dere gjør/i).fill(bedrift.forretningside);
+      await page.getByPlaceholder(/Beskriv hva bedriften gjør/i).fill(bedrift.forretningside);
       await page.getByPlaceholder('Fornavn').fill(bedrift.fornavn);
       await page.getByPlaceholder('Etternavn').fill(bedrift.etternavn);
       await page.getByPlaceholder('din@epost.no').fill(unikEpost);

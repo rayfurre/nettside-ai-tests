@@ -1,6 +1,6 @@
 {
   "name": "nettside-ai-tests",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "E2E-tester for Nettside.ai",
   "scripts": {
     "test": "playwright test",
@@ -9,6 +9,7 @@
     "report": "playwright show-report"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.0",
     "@playwright/test": "^1.41.0",
     "@types/node": "^20.11.0"
   },

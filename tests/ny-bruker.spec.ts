@@ -1,9 +1,10 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.14 (data-editor-ready + editor-image-N fra Lovable, guards mellom substeg)
+// VERSION: 7.15 (nytt steg 5b: WCAG kontrastsjekk med axe-core)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { getDagensBedrift, genererUnikEpost } from './testdata';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -124,7 +125,6 @@ async function collectToasts(page: Page, logs: LogEntry[]): Promise<void> {
   }
 }
 
-/** v7.11: Lukk tips-dialog og tips-toast via data-testid (med fallback) */
 async function dismissDialogsAndToasts(page: Page): Promise<void> {
   try {
     if (!isPageAlive(page)) return;
@@ -172,7 +172,6 @@ function createTestImage(): string {
   return path.resolve(p);
 }
 
-/** v7.14: Vent på at editor-iframen er klar etter save (Lovable: data-editor-ready) */
 async function waitForEditorReady(page: Page, timeout: number = 15000): Promise<boolean> {
   try {
     if (!isPageAlive(page)) return false;
@@ -208,7 +207,6 @@ async function enterEditMode(page: Page): Promise<boolean> {
       await expect(page.locator(SEL.editButton)).toBeVisible({ timeout: 10000 });
       await page.locator(SEL.editButton).click();
       await expect(page.locator(SEL.editorIframe)).toBeVisible({ timeout: 10000 });
-      // v7.14: Bruk data-editor-ready hvis tilgjengelig, fallback til readyState
       const editorReady = await waitForEditorReady(page, 15000);
       if (!editorReady) {
         await page.waitForFunction(() => {
@@ -226,7 +224,6 @@ async function enterEditMode(page: Page): Promise<boolean> {
   return false;
 }
 
-/** v7.14: Lagre og vent på at editor er klar igjen */
 async function saveEditorChanges(page: Page): Promise<boolean> {
   try {
     if (!isPageAlive(page)) return false;
@@ -245,12 +242,10 @@ function getEditorIframe(page: Page): FrameLocator {
   return page.frameLocator(SEL.editorIframe);
 }
 
-/** v7.14: Åpne bilde-modal via data-testid="editor-image-N" med fallback til gammel metode */
 async function openImageModal(page: Page, skipCount: number = 0): Promise<boolean> {
   try {
     if (!isPageAlive(page)) return false;
     const iframe = getEditorIframe(page);
-    // v7.14: Prøv data-testid="editor-image-N" først
     const testIdSelector = `[data-testid="editor-image-${skipCount}"]`;
     const hasTestId = await iframe.locator(testIdSelector).isVisible({ timeout: 3000 }).catch(() => false);
     if (hasTestId) {
@@ -264,7 +259,6 @@ async function openImageModal(page: Page, skipCount: number = 0): Promise<boolea
         }
       }
     }
-    // Fallback: gammel metode
     console.log(`   📷 Fallback: leter etter klikkbare bilder (skipCount=${skipCount})`);
     await iframe.locator('img').first().waitFor({ state: 'visible', timeout: 10000 });
     const allImages = await iframe.locator('img').all();
@@ -451,7 +445,47 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 5: Vent på generering', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // v7.11: Vent 5s, samle toasts, dismiss dialog+toast
+    // ========================================
+    // STEG 5b: WCAG kontrastsjekk (axe-core)
+    // ========================================
+    stegStart = Date.now();
+    try {
+      if (!isPageAlive(page)) throw new Error('Page lukket');
+      const axeResults = await new AxeBuilder({ page })
+        .withRules(['color-contrast'])
+        .analyze();
+
+      const violations = axeResults.violations;
+      if (violations.length === 0) {
+        result.steg.push({ navn: 'Steg 5b: WCAG kontrastsjekk', status: 'OK', melding: 'Alle elementer har tilstrekkelig kontrast (WCAG AA)', tidBrukt: Date.now() - stegStart });
+      } else {
+        let totalNodes = 0;
+        const details: string[] = [];
+        for (const v of violations) {
+          for (const node of v.nodes) {
+            totalNodes++;
+            const target = node.target.join(', ');
+            const msg = node.failureSummary || 'Utilstrekkelig kontrast';
+            details.push(`${target}: ${msg}`);
+          }
+        }
+        // Skriv detaljer til fil for debugging
+        fs.mkdirSync('test-results', { recursive: true });
+        fs.writeFileSync('test-results/steg5b-kontrast-detaljer.json', JSON.stringify(violations, null, 2));
+        console.log(`   ⚠️ ${totalNodes} element(er) med kontrastfeil:`);
+        for (const d of details.slice(0, 10)) console.log(`   - ${d}`);
+        if (details.length > 10) console.log(`   ... og ${details.length - 10} til`);
+
+        await safeScreenshot(page, 'test-results/steg5b-kontrast-feil.png', true);
+        result.screenshots.push('steg5b-kontrast-feil.png');
+        result.steg.push({ navn: 'Steg 5b: WCAG kontrastsjekk', status: 'FEILET', melding: `${totalNodes} element(er) har utilstrekkelig kontrast. Se steg5b-kontrast-detaljer.json`, tidBrukt: Date.now() - stegStart });
+      }
+    } catch (error) {
+      await safeScreenshot(page, 'test-results/steg5b-feil.png'); result.screenshots.push('steg5b-feil.png');
+      result.steg.push({ navn: 'Steg 5b: WCAG kontrastsjekk', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+    }
+
+    // Vent, samle toasts, dismiss dialog+toast
     await page.waitForTimeout(5000);
     await collectToasts(page, logs);
     await dismissDialogsAndToasts(page);
@@ -501,7 +535,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     } catch (error) { result.steg.push({ navn: 'Steg 6c: Lagre tekstendring', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart }); }
 
     // STEG 7: Bilde - Last opp
-    let modalOpen = false; // v7.14: Track for guards
+    let modalOpen = false;
 
     stegStart = Date.now();
     try {
@@ -828,7 +862,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     printReport(result);
     fs.mkdirSync('test-results', { recursive: true });
     fs.writeFileSync('test-results/rapport.json', JSON.stringify(result, null, 2));
-    const kritiskeFeil = result.steg.filter(s => s.status === 'FEILET' && s.navn.includes('Steg 5'));
+    const kritiskeFeil = result.steg.filter(s => s.status === 'FEILET' && s.navn.includes('Steg 5:'));
     if (kritiskeFeil.length > 0) throw new Error(`Kritiske steg feilet: ${kritiskeFeil.map(s => s.navn).join(', ')}`);
   });
 });

@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.13 (dismissDialogsAndToasts i enterEditMode + retry)
+// VERSION: 7.14 (data-editor-ready + editor-image-N fra Lovable, guards mellom substeg)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -128,8 +128,6 @@ async function collectToasts(page: Page, logs: LogEntry[]): Promise<void> {
 async function dismissDialogsAndToasts(page: Page): Promise<void> {
   try {
     if (!isPageAlive(page)) return;
-
-    // 1. Lukk "Tips til en bedre nettside"-dialogen
     const enhanceDismiss = page.locator(SEL.enhanceDialogDismiss);
     if (await enhanceDismiss.isVisible({ timeout: 2000 }).catch(() => false)) {
       console.log('   🔲 Lukker tips-dialog via data-testid...');
@@ -150,8 +148,6 @@ async function dismissDialogsAndToasts(page: Page): Promise<void> {
         }
       }
     }
-
-    // 2. Lukk tips-toasten
     const tipDismiss = page.locator(SEL.tipToastDismiss);
     if (await tipDismiss.isVisible({ timeout: 2000 }).catch(() => false)) {
       console.log('   🔲 Lukker tips-toast via data-testid...');
@@ -165,7 +161,6 @@ async function dismissDialogsAndToasts(page: Page): Promise<void> {
       }).catch(() => 0);
       if (removed > 0) console.log(`   🧹 Fjernet ${removed} toast/notification-elementer fra DOM (fallback)`);
     }
-
     await page.waitForTimeout(500);
   } catch {}
 }
@@ -177,36 +172,61 @@ function createTestImage(): string {
   return path.resolve(p);
 }
 
+/** v7.14: Vent på at editor-iframen er klar etter save (Lovable: data-editor-ready) */
+async function waitForEditorReady(page: Page, timeout: number = 15000): Promise<boolean> {
+  try {
+    if (!isPageAlive(page)) return false;
+    const editorVisible = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
+    if (!editorVisible) return false;
+    let elapsed = 0;
+    while (elapsed < timeout) {
+      if (!isPageAlive(page)) return false;
+      const ready = await page.locator(`${SEL.editorIframe}[data-editor-ready="true"]`).isVisible().catch(() => false);
+      if (ready) { console.log(`   ✅ Editor ready etter ${elapsed}ms`); return true; }
+      await page.waitForTimeout(500);
+      elapsed += 500;
+    }
+    console.log('   ⚠️ data-editor-ready timeout, faller tilbake til readyState-sjekk');
+    try {
+      await page.waitForFunction(() => {
+        const iframe = document.querySelector('[data-testid="editor-iframe"]') as HTMLIFrameElement;
+        return iframe?.contentDocument?.readyState === 'complete';
+      }, { timeout: 5000 });
+      await page.waitForTimeout(2000);
+      return true;
+    } catch { return false; }
+  } catch { return false; }
+}
+
 async function enterEditMode(page: Page): Promise<boolean> {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       if (!isPageAlive(page)) return false;
       console.log(`   🔧 enterEditMode forsøk ${attempt}/3...`);
-      
-      // Dismiss eventuelle toasts/dialoger som blokkerer
       await dismissDialogsAndToasts(page);
-      
       await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 30000 });
       await expect(page.locator(SEL.editButton)).toBeVisible({ timeout: 10000 });
       await page.locator(SEL.editButton).click();
       await expect(page.locator(SEL.editorIframe)).toBeVisible({ timeout: 10000 });
-      await page.waitForFunction(() => {
-        const iframe = document.querySelector('[data-testid="editor-iframe"]') as HTMLIFrameElement;
-        return iframe?.contentDocument?.readyState === 'complete';
-      }, { timeout: 15000 });
-      await page.waitForTimeout(3000);
+      // v7.14: Bruk data-editor-ready hvis tilgjengelig, fallback til readyState
+      const editorReady = await waitForEditorReady(page, 15000);
+      if (!editorReady) {
+        await page.waitForFunction(() => {
+          const iframe = document.querySelector('[data-testid="editor-iframe"]') as HTMLIFrameElement;
+          return iframe?.contentDocument?.readyState === 'complete';
+        }, { timeout: 15000 });
+        await page.waitForTimeout(3000);
+      }
       return true;
     } catch (error) {
       console.log(`   ⚠️ enterEditMode forsøk ${attempt} feilet: ${error}`);
-      if (attempt < 3) {
-        await dismissDialogsAndToasts(page);
-        await page.waitForTimeout(2000);
-      }
+      if (attempt < 3) { await dismissDialogsAndToasts(page); await page.waitForTimeout(2000); }
     }
   }
   return false;
 }
 
+/** v7.14: Lagre og vent på at editor er klar igjen */
 async function saveEditorChanges(page: Page): Promise<boolean> {
   try {
     if (!isPageAlive(page)) return false;
@@ -214,7 +234,9 @@ async function saveEditorChanges(page: Page): Promise<boolean> {
     if (!(await btn.isVisible().catch(() => false))) return false;
     if (await btn.isDisabled().catch(() => true)) return true;
     await btn.click();
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(1000);
+    await waitForEditorReady(page, 15000);
+    await page.waitForTimeout(1000);
     return true;
   } catch { return false; }
 }
@@ -223,10 +245,27 @@ function getEditorIframe(page: Page): FrameLocator {
   return page.frameLocator(SEL.editorIframe);
 }
 
+/** v7.14: Åpne bilde-modal via data-testid="editor-image-N" med fallback til gammel metode */
 async function openImageModal(page: Page, skipCount: number = 0): Promise<boolean> {
   try {
     if (!isPageAlive(page)) return false;
     const iframe = getEditorIframe(page);
+    // v7.14: Prøv data-testid="editor-image-N" først
+    const testIdSelector = `[data-testid="editor-image-${skipCount}"]`;
+    const hasTestId = await iframe.locator(testIdSelector).isVisible({ timeout: 3000 }).catch(() => false);
+    if (hasTestId) {
+      console.log(`   📷 Bruker data-testid="editor-image-${skipCount}"`);
+      await iframe.locator(testIdSelector).click();
+      try { await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 5000 }); return true; } catch {
+        console.log('   ⚠️ data-testid klikk åpnet ikke modal, prøver dispatchEvent...');
+        await iframe.locator(testIdSelector).dispatchEvent('click');
+        try { await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 5000 }); return true; } catch {
+          console.log('   ⚠️ dispatchEvent virket heller ikke, faller tilbake til gammel metode');
+        }
+      }
+    }
+    // Fallback: gammel metode
+    console.log(`   📷 Fallback: leter etter klikkbare bilder (skipCount=${skipCount})`);
     await iframe.locator('img').first().waitFor({ state: 'visible', timeout: 10000 });
     const allImages = await iframe.locator('img').all();
     const clickable: typeof allImages = [];
@@ -236,7 +275,7 @@ async function openImageModal(page: Page, skipCount: number = 0): Promise<boolea
       if (!box || box.width <= 50 || box.height <= 50) continue;
       clickable.push(img);
     }
-    console.log(`   📷 Fant ${clickable.length} klikkbare bilder (skipCount=${skipCount})`);
+    console.log(`   📷 Fant ${clickable.length} klikkbare bilder`);
     if (clickable.length === 0) return false;
     const idx = skipCount < clickable.length ? skipCount : 0;
     const order = [idx, ...Array.from({length: clickable.length}, (_, i) => i).filter(i => i !== idx)];
@@ -245,32 +284,21 @@ async function openImageModal(page: Page, skipCount: number = 0): Promise<boolea
       const box = await clickable[i].boundingBox().catch(() => null);
       console.log(`   📷 Klikker bilde #${i}: ${box ? Math.round(box.width) + 'x' + Math.round(box.height) : '?'}`);
       await clickable[i].dispatchEvent('click');
-      try {
-        await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 5000 });
-        return true;
-      } catch {
+      try { await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 5000 }); return true; } catch {
         console.log('   ⚠️ dispatchEvent virket ikke, prøver .click()...');
         await clickable[i].click().catch(() => {});
-        try {
-          await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 3000 });
-          return true;
-        } catch {
+        try { await expect(page.locator(SEL.imageDialog)).toBeVisible({ timeout: 3000 }); return true; } catch {
           console.log('   ⚠️ Modal åpnet ikke, prøver neste bilde...');
         }
       }
     }
     console.log('   ❌ Ingen bilder åpnet modalen');
     return false;
-  } catch (error) {
-    console.log(`   ❌ openImageModal feil: ${error}`);
-    return false;
-  }
+  } catch (error) { console.log(`   ❌ openImageModal feil: ${error}`); return false; }
 }
 
 async function safeScreenshot(page: Page, filePath: string, fullPage: boolean = false): Promise<void> {
-  try {
-    if (isPageAlive(page)) await page.screenshot({ path: filePath, fullPage });
-  } catch {}
+  try { if (isPageAlive(page)) await page.screenshot({ path: filePath, fullPage }); } catch {}
 }
 
 async function dismissUnexpectedDialog(page: Page): Promise<boolean> {
@@ -279,8 +307,7 @@ async function dismissUnexpectedDialog(page: Page): Promise<boolean> {
     const imageDialogOpen = await page.locator(SEL.imageDialog).isVisible().catch(() => false);
     if (imageDialogOpen) {
       console.log('   ⚠️ Uventet bilde-dialog oppdaget, lukker med Escape...');
-      await page.keyboard.press('Escape');
-      await page.waitForTimeout(500);
+      await page.keyboard.press('Escape'); await page.waitForTimeout(500);
       const stillOpen = await page.locator(SEL.imageDialog).isVisible().catch(() => false);
       if (stillOpen) { await page.mouse.click(1, 1); await page.waitForTimeout(500); }
       return true;
@@ -337,9 +364,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     };
     await setupMonitoring(page, logs);
 
-    // ========================================
     // STEG 1: Åpne app.nettside.ai
-    // ========================================
     let stegStart = Date.now();
     try {
       await page.goto('/', { timeout: 60000 });
@@ -348,15 +373,12 @@ test.describe('Nettside.ai - Komplett test', () => {
       await collectToasts(page, logs);
       result.steg.push({ navn: 'Steg 1: Åpne app.nettside.ai', status: 'OK', melding: 'Siden lastet, skjema synlig', tidBrukt: Date.now() - stegStart });
     } catch (error) {
-      await safeScreenshot(page, 'test-results/steg1-feil.png');
-      result.screenshots.push('steg1-feil.png');
+      await safeScreenshot(page, 'test-results/steg1-feil.png'); result.screenshots.push('steg1-feil.png');
       await collectToasts(page, logs);
       result.steg.push({ navn: 'Steg 1: Åpne app.nettside.ai', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // ========================================
     // STEG 2: Fyll ut skjema
-    // ========================================
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
@@ -369,14 +391,11 @@ test.describe('Nettside.ai - Komplett test', () => {
       await collectToasts(page, logs);
       result.steg.push({ navn: 'Steg 2: Fyll ut skjema', status: 'OK', melding: 'Alle 6 felter utfylt', tidBrukt: Date.now() - stegStart });
     } catch (error) {
-      await safeScreenshot(page, 'test-results/steg2-feil.png');
-      result.screenshots.push('steg2-feil.png');
+      await safeScreenshot(page, 'test-results/steg2-feil.png'); result.screenshots.push('steg2-feil.png');
       result.steg.push({ navn: 'Steg 2: Fyll ut skjema', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // ========================================
-    // STEG 3: Klikk Lagre (ActionBar)
-    // ========================================
+    // STEG 3: Klikk Lagre
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
@@ -385,14 +404,11 @@ test.describe('Nettside.ai - Komplett test', () => {
       await collectToasts(page, logs);
       result.steg.push({ navn: 'Steg 3: Klikk Lagre', status: 'OK', melding: 'Lagre-knapp klikket', tidBrukt: Date.now() - stegStart });
     } catch (error) {
-      await safeScreenshot(page, 'test-results/steg3-feil.png');
-      result.screenshots.push('steg3-feil.png');
+      await safeScreenshot(page, 'test-results/steg3-feil.png'); result.screenshots.push('steg3-feil.png');
       result.steg.push({ navn: 'Steg 3: Klikk Lagre', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // ========================================
-    // STEG 4: Sjekk progress-animasjon
-    // ========================================
+    // STEG 4: Sjekk progress
     stegStart = Date.now();
     let progressStartet = false;
     try {
@@ -405,14 +421,11 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 4: Sjekk progress', status: progressStartet ? 'OK' : 'FEILET', melding: progressStartet ? 'Progress startet' : 'Progress IKKE synlig', tidBrukt: Date.now() - stegStart });
       if (!progressStartet) { await safeScreenshot(page, 'test-results/steg4-ingen-progress.png'); result.screenshots.push('steg4-ingen-progress.png'); }
     } catch (error) {
-      await safeScreenshot(page, 'test-results/steg4-feil.png');
-      result.screenshots.push('steg4-feil.png');
+      await safeScreenshot(page, 'test-results/steg4-feil.png'); result.screenshots.push('steg4-feil.png');
       result.steg.push({ navn: 'Steg 4: Sjekk progress', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // ========================================
-    // STEG 5: Vent på generering (~3 min)
-    // ========================================
+    // STEG 5: Vent på generering
     stegStart = Date.now();
     let genereringFullfort = false;
     try {
@@ -438,9 +451,7 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 5: Vent på generering', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
-    // ========================================
     // v7.11: Vent 5s, samle toasts, dismiss dialog+toast
-    // ========================================
     await page.waitForTimeout(5000);
     await collectToasts(page, logs);
     await dismissDialogsAndToasts(page);
@@ -449,9 +460,7 @@ test.describe('Nettside.ai - Komplett test', () => {
     // EDITOR-TESTER (steg 6-9)
     // ================================================================
 
-    // ========================================
     // STEG 6: Tekstredigering
-    // ========================================
     stegStart = Date.now();
     let editModeActive = false;
     try {
@@ -491,9 +500,9 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 6c: Lagre tekstendring', status: saved ? 'OK' : 'FEILET', melding: saved ? 'Lagret' : 'Knapp ikke funnet', tidBrukt: Date.now() - stegStart });
     } catch (error) { result.steg.push({ navn: 'Steg 6c: Lagre tekstendring', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart }); }
 
-    // ========================================
     // STEG 7: Bilde - Last opp
-    // ========================================
+    let modalOpen = false; // v7.14: Track for guards
+
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
@@ -501,7 +510,7 @@ test.describe('Nettside.ai - Komplett test', () => {
         await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 10000 }).catch(() => {});
         editModeActive = await enterEditMode(page); if (!editModeActive) throw new Error('Kunne ikke aktivere redigeringsmodus');
       }
-      await page.waitForTimeout(3000);
+      await waitForEditorReady(page, 10000);
       result.steg.push({ navn: 'Steg 7a: Redigeringsmodus (upload)', status: 'OK', melding: 'Aktivert', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await safeScreenshot(page, 'test-results/steg7a-feil.png'); result.screenshots.push('steg7a-feil.png');
@@ -511,7 +520,8 @@ test.describe('Nettside.ai - Komplett test', () => {
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
-      if (!(await openImageModal(page, 0))) throw new Error('Bilde-modal åpnet ikke');
+      modalOpen = await openImageModal(page, 0);
+      if (!modalOpen) throw new Error('Bilde-modal åpnet ikke');
       await safeScreenshot(page, 'test-results/steg7b-modal.png'); result.screenshots.push('steg7b-modal.png');
       result.steg.push({ navn: 'Steg 7b: Åpne bilde-modal', status: 'OK', melding: 'Modal åpnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
@@ -520,28 +530,32 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     stegStart = Date.now();
-    try {
-      if (!isPageAlive(page)) throw new Error('Page lukket');
-      await page.locator(SEL.tabUpload).click(); await page.waitForTimeout(500);
-      await page.locator('input[type="file"]').first().setInputFiles(createTestImage());
-      await page.waitForTimeout(3000); await collectToasts(page, logs);
-      await safeScreenshot(page, 'test-results/steg7c-opplastet.png'); result.screenshots.push('steg7c-opplastet.png');
-      result.steg.push({ navn: 'Steg 7c: Last opp bilde', status: 'OK', melding: 'Testbilde lastet opp', tidBrukt: Date.now() - stegStart });
-    } catch (error) {
-      await safeScreenshot(page, 'test-results/steg7c-feil.png'); result.screenshots.push('steg7c-feil.png');
-      result.steg.push({ navn: 'Steg 7c: Last opp bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
-    }
+    if (modalOpen) {
+      try {
+        if (!isPageAlive(page)) throw new Error('Page lukket');
+        await page.locator(SEL.tabUpload).click(); await page.waitForTimeout(500);
+        await page.locator('input[type="file"]').first().setInputFiles(createTestImage());
+        await page.waitForTimeout(3000); await collectToasts(page, logs);
+        await safeScreenshot(page, 'test-results/steg7c-opplastet.png'); result.screenshots.push('steg7c-opplastet.png');
+        result.steg.push({ navn: 'Steg 7c: Last opp bilde', status: 'OK', melding: 'Testbilde lastet opp', tidBrukt: Date.now() - stegStart });
+      } catch (error) {
+        await safeScreenshot(page, 'test-results/steg7c-feil.png'); result.screenshots.push('steg7c-feil.png');
+        result.steg.push({ navn: 'Steg 7c: Last opp bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+      }
+    } else { result.steg.push({ navn: 'Steg 7c: Last opp bilde', status: 'HOPPET OVER', melding: 'Modal ikke åpen', tidBrukt: 0 }); }
 
     stegStart = Date.now();
-    try {
-      if (!isPageAlive(page)) throw new Error('Page lukket');
-      await expect(page.locator(SEL.useImageBtn)).toBeVisible({ timeout: 10000 });
-      await page.locator(SEL.useImageBtn).click(); await page.waitForTimeout(3000); await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 7d: Bruk bildet', status: 'OK', melding: 'Bilde valgt', tidBrukt: Date.now() - stegStart });
-    } catch (error) {
-      await safeScreenshot(page, 'test-results/steg7d-feil.png'); result.screenshots.push('steg7d-feil.png');
-      result.steg.push({ navn: 'Steg 7d: Bruk bildet', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
-    }
+    if (modalOpen) {
+      try {
+        if (!isPageAlive(page)) throw new Error('Page lukket');
+        await expect(page.locator(SEL.useImageBtn)).toBeVisible({ timeout: 10000 });
+        await page.locator(SEL.useImageBtn).click(); await page.waitForTimeout(3000); await collectToasts(page, logs);
+        result.steg.push({ navn: 'Steg 7d: Bruk bildet', status: 'OK', melding: 'Bilde valgt', tidBrukt: Date.now() - stegStart });
+      } catch (error) {
+        await safeScreenshot(page, 'test-results/steg7d-feil.png'); result.screenshots.push('steg7d-feil.png');
+        result.steg.push({ navn: 'Steg 7d: Bruk bildet', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+      }
+    } else { result.steg.push({ navn: 'Steg 7d: Bruk bildet', status: 'HOPPET OVER', melding: 'Modal ikke åpen', tidBrukt: 0 }); }
 
     stegStart = Date.now();
     try {
@@ -550,12 +564,10 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 7e: Lagre editor', status: saved ? 'OK' : 'FEILET', melding: saved ? 'Lagret' : 'Knapp ikke funnet', tidBrukt: Date.now() - stegStart });
     } catch (error) { result.steg.push({ navn: 'Steg 7e: Lagre editor', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart }); }
 
-    // ========================================
     // STEG 8: Bilde - URL (Unsplash)
-    // ========================================
     try { if (isPageAlive(page)) { await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(500).catch(() => {}); } } catch {}
-
     const testBildeUrl = 'https://images.unsplash.com/photo-1581578731548-c64695cc6952?w=800&h=600&fit=crop';
+    modalOpen = false;
 
     stegStart = Date.now();
     try {
@@ -564,7 +576,7 @@ test.describe('Nettside.ai - Komplett test', () => {
         await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 10000 }).catch(() => {});
         if (!(await enterEditMode(page))) throw new Error('Kunne ikke aktivere redigeringsmodus');
       }
-      await page.waitForTimeout(3000);
+      await waitForEditorReady(page, 10000);
       result.steg.push({ navn: 'Steg 8a: Redigeringsmodus (URL)', status: 'OK', melding: 'Aktivert', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await safeScreenshot(page, 'test-results/steg8a-feil.png'); result.screenshots.push('steg8a-feil.png');
@@ -574,7 +586,8 @@ test.describe('Nettside.ai - Komplett test', () => {
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
-      if (!(await openImageModal(page, 1))) throw new Error('Modal åpnet ikke');
+      modalOpen = await openImageModal(page, 1);
+      if (!modalOpen) throw new Error('Modal åpnet ikke');
       result.steg.push({ navn: 'Steg 8b: Åpne bilde-modal', status: 'OK', melding: 'Modal åpnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await safeScreenshot(page, 'test-results/steg8b-feil.png'); result.screenshots.push('steg8b-feil.png');
@@ -582,31 +595,35 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     stegStart = Date.now();
-    try {
-      if (!isPageAlive(page)) throw new Error('Page lukket');
-      await page.locator(SEL.tabUrl).click(); await page.waitForTimeout(1000);
-      const urlInput = page.locator(`${SEL.imageDialog} input[type="url"], ${SEL.imageDialog} input[placeholder*="URL"], ${SEL.imageDialog} input[placeholder*="http"]`).first();
-      let filled = await urlInput.isVisible().catch(() => false);
-      if (filled) { await urlInput.fill(testBildeUrl); }
-      else { for (const inp of await page.locator(`${SEL.imageDialog} input`).all()) { if ((await inp.isVisible().catch(() => false)) && (await inp.getAttribute('type').catch(() => '')) !== 'file') { await inp.fill(testBildeUrl); filled = true; break; } } }
-      if (!filled) throw new Error('URL-input ikke funnet');
-      await page.waitForTimeout(3000);
-      result.steg.push({ navn: 'Steg 8c: Lim inn bilde-URL', status: 'OK', melding: 'Unsplash-URL limt inn', tidBrukt: Date.now() - stegStart });
-    } catch (error) {
-      await safeScreenshot(page, 'test-results/steg8c-feil.png'); result.screenshots.push('steg8c-feil.png');
-      result.steg.push({ navn: 'Steg 8c: Lim inn bilde-URL', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
-    }
+    if (modalOpen) {
+      try {
+        if (!isPageAlive(page)) throw new Error('Page lukket');
+        await page.locator(SEL.tabUrl).click(); await page.waitForTimeout(1000);
+        const urlInput = page.locator(`${SEL.imageDialog} input[type="url"], ${SEL.imageDialog} input[placeholder*="URL"], ${SEL.imageDialog} input[placeholder*="http"]`).first();
+        let filled = await urlInput.isVisible().catch(() => false);
+        if (filled) { await urlInput.fill(testBildeUrl); }
+        else { for (const inp of await page.locator(`${SEL.imageDialog} input`).all()) { if ((await inp.isVisible().catch(() => false)) && (await inp.getAttribute('type').catch(() => '')) !== 'file') { await inp.fill(testBildeUrl); filled = true; break; } } }
+        if (!filled) throw new Error('URL-input ikke funnet');
+        await page.waitForTimeout(3000);
+        result.steg.push({ navn: 'Steg 8c: Lim inn bilde-URL', status: 'OK', melding: 'Unsplash-URL limt inn', tidBrukt: Date.now() - stegStart });
+      } catch (error) {
+        await safeScreenshot(page, 'test-results/steg8c-feil.png'); result.screenshots.push('steg8c-feil.png');
+        result.steg.push({ navn: 'Steg 8c: Lim inn bilde-URL', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+      }
+    } else { result.steg.push({ navn: 'Steg 8c: Lim inn bilde-URL', status: 'HOPPET OVER', melding: 'Modal ikke åpen', tidBrukt: 0 }); }
 
     stegStart = Date.now();
-    try {
-      if (!isPageAlive(page)) throw new Error('Page lukket');
-      await expect(page.locator(SEL.useImageBtn)).toBeVisible({ timeout: 10000 });
-      await page.locator(SEL.useImageBtn).click(); await page.waitForTimeout(3000); await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 8d: Bruk URL-bilde', status: 'OK', melding: 'Lagret', tidBrukt: Date.now() - stegStart });
-    } catch (error) {
-      await safeScreenshot(page, 'test-results/steg8d-feil.png'); result.screenshots.push('steg8d-feil.png');
-      result.steg.push({ navn: 'Steg 8d: Bruk URL-bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
-    }
+    if (modalOpen) {
+      try {
+        if (!isPageAlive(page)) throw new Error('Page lukket');
+        await expect(page.locator(SEL.useImageBtn)).toBeVisible({ timeout: 10000 });
+        await page.locator(SEL.useImageBtn).click(); await page.waitForTimeout(3000); await collectToasts(page, logs);
+        result.steg.push({ navn: 'Steg 8d: Bruk URL-bilde', status: 'OK', melding: 'Lagret', tidBrukt: Date.now() - stegStart });
+      } catch (error) {
+        await safeScreenshot(page, 'test-results/steg8d-feil.png'); result.screenshots.push('steg8d-feil.png');
+        result.steg.push({ navn: 'Steg 8d: Bruk URL-bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+      }
+    } else { result.steg.push({ navn: 'Steg 8d: Bruk URL-bilde', status: 'HOPPET OVER', melding: 'Modal ikke åpen', tidBrukt: 0 }); }
 
     stegStart = Date.now();
     try {
@@ -615,10 +632,9 @@ test.describe('Nettside.ai - Komplett test', () => {
       result.steg.push({ navn: 'Steg 8e: Lagre editor', status: saved ? 'OK' : 'FEILET', melding: saved ? 'Lagret' : 'Knapp ikke funnet', tidBrukt: Date.now() - stegStart });
     } catch (error) { result.steg.push({ navn: 'Steg 8e: Lagre editor', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart }); }
 
-    // ========================================
     // STEG 9: Bilde - AI
-    // ========================================
     try { if (isPageAlive(page)) { await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(500).catch(() => {}); } } catch {}
+    modalOpen = false;
 
     stegStart = Date.now();
     try {
@@ -627,7 +643,7 @@ test.describe('Nettside.ai - Komplett test', () => {
         await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 10000 }).catch(() => {});
         if (!(await enterEditMode(page))) throw new Error('Kunne ikke aktivere redigeringsmodus');
       }
-      await page.waitForTimeout(3000);
+      await waitForEditorReady(page, 10000);
       result.steg.push({ navn: 'Steg 9a: Redigeringsmodus (AI)', status: 'OK', melding: 'Aktivert', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await safeScreenshot(page, 'test-results/steg9a-feil.png'); result.screenshots.push('steg9a-feil.png');
@@ -637,7 +653,8 @@ test.describe('Nettside.ai - Komplett test', () => {
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
-      if (!(await openImageModal(page, 2))) throw new Error('Modal åpnet ikke');
+      modalOpen = await openImageModal(page, 2);
+      if (!modalOpen) throw new Error('Modal åpnet ikke');
       result.steg.push({ navn: 'Steg 9b: Åpne bilde-modal', status: 'OK', melding: 'Modal åpnet', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await safeScreenshot(page, 'test-results/steg9b-feil.png'); result.screenshots.push('steg9b-feil.png');
@@ -645,70 +662,78 @@ test.describe('Nettside.ai - Komplett test', () => {
     }
 
     stegStart = Date.now();
-    try {
-      if (!isPageAlive(page)) throw new Error('Page lukket');
-      await page.locator(SEL.tabAi).click(); await page.waitForTimeout(2000);
-      const promptInput = page.locator(SEL.aiPromptInput);
-      let elapsed = 0; let ready = false;
-      while (!ready && elapsed < 30000) {
-        if (!isPageAlive(page)) break;
-        const v = await promptInput.inputValue().catch(() => ''); if (v.length > 10) { ready = true; console.log(`   ✅ AI-beskrivelse: "${v.substring(0,60)}..."`); break; } await page.waitForTimeout(2000); elapsed += 2000;
+    if (modalOpen) {
+      try {
+        if (!isPageAlive(page)) throw new Error('Page lukket');
+        await page.locator(SEL.tabAi).click(); await page.waitForTimeout(2000);
+        const promptInput = page.locator(SEL.aiPromptInput);
+        let elapsed = 0; let ready = false;
+        while (!ready && elapsed < 30000) {
+          if (!isPageAlive(page)) break;
+          const v = await promptInput.inputValue().catch(() => ''); if (v.length > 10) { ready = true; console.log(`   ✅ AI-beskrivelse: "${v.substring(0,60)}..."`); break; } await page.waitForTimeout(2000); elapsed += 2000;
+        }
+        await safeScreenshot(page, 'test-results/steg9c-ai-beskrivelse.png'); result.screenshots.push('steg9c-ai-beskrivelse.png');
+        result.steg.push({ navn: 'Steg 9c: Vent på AI-beskrivelse', status: ready ? 'OK' : 'FEILET', melding: ready ? `Mottatt etter ${Math.round(elapsed/1000)}s` : 'Timeout', tidBrukt: Date.now() - stegStart });
+      } catch (error) {
+        await safeScreenshot(page, 'test-results/steg9c-feil.png'); result.screenshots.push('steg9c-feil.png');
+        result.steg.push({ navn: 'Steg 9c: Vent på AI-beskrivelse', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
       }
-      await safeScreenshot(page, 'test-results/steg9c-ai-beskrivelse.png'); result.screenshots.push('steg9c-ai-beskrivelse.png');
-      result.steg.push({ navn: 'Steg 9c: Vent på AI-beskrivelse', status: ready ? 'OK' : 'FEILET', melding: ready ? `Mottatt etter ${Math.round(elapsed/1000)}s` : 'Timeout', tidBrukt: Date.now() - stegStart });
-    } catch (error) {
-      await safeScreenshot(page, 'test-results/steg9c-feil.png'); result.screenshots.push('steg9c-feil.png');
-      result.steg.push({ navn: 'Steg 9c: Vent på AI-beskrivelse', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
-    }
+    } else { result.steg.push({ navn: 'Steg 9c: Vent på AI-beskrivelse', status: 'HOPPET OVER', melding: 'Modal ikke åpen', tidBrukt: 0 }); }
 
     stegStart = Date.now();
-    try {
-      if (!isPageAlive(page)) throw new Error('Page lukket');
-      const before = await page.locator(SEL.aiPromptInput).inputValue().catch(() => '');
-      await expect(page.locator(SEL.enhancePromptBtn)).toBeVisible({ timeout: 5000 }); await page.locator(SEL.enhancePromptBtn).click();
-      console.log('   ⏳ Venter på forbedret prompt...');
-      let elapsed = 0; let done = false;
-      while (!done && elapsed < 15000) {
-        if (!isPageAlive(page)) break;
-        await page.waitForTimeout(2000); elapsed += 2000; const a = await page.locator(SEL.aiPromptInput).inputValue().catch(() => ''); if (a !== before && a.length > 10) { done = true; console.log(`   ✅ Forbedret: "${a.substring(0,60)}..."`); }
+    if (modalOpen) {
+      try {
+        if (!isPageAlive(page)) throw new Error('Page lukket');
+        const before = await page.locator(SEL.aiPromptInput).inputValue().catch(() => '');
+        await expect(page.locator(SEL.enhancePromptBtn)).toBeVisible({ timeout: 5000 }); await page.locator(SEL.enhancePromptBtn).click();
+        console.log('   ⏳ Venter på forbedret prompt...');
+        let elapsed = 0; let done = false;
+        while (!done && elapsed < 15000) {
+          if (!isPageAlive(page)) break;
+          await page.waitForTimeout(2000); elapsed += 2000; const a = await page.locator(SEL.aiPromptInput).inputValue().catch(() => ''); if (a !== before && a.length > 10) { done = true; console.log(`   ✅ Forbedret: "${a.substring(0,60)}..."`); }
+        }
+        await safeScreenshot(page, 'test-results/steg9d-forbedret.png'); result.screenshots.push('steg9d-forbedret.png');
+        result.steg.push({ navn: 'Steg 9d: Forbedre prompt', status: done ? 'OK' : 'FEILET', melding: done ? `Forbedret etter ${Math.round(elapsed/1000)}s` : 'Timeout', tidBrukt: Date.now() - stegStart });
+      } catch (error) {
+        await safeScreenshot(page, 'test-results/steg9d-feil.png'); result.screenshots.push('steg9d-feil.png');
+        result.steg.push({ navn: 'Steg 9d: Forbedre prompt', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
       }
-      await safeScreenshot(page, 'test-results/steg9d-forbedret.png'); result.screenshots.push('steg9d-forbedret.png');
-      result.steg.push({ navn: 'Steg 9d: Forbedre prompt', status: done ? 'OK' : 'FEILET', melding: done ? `Forbedret etter ${Math.round(elapsed/1000)}s` : 'Timeout', tidBrukt: Date.now() - stegStart });
-    } catch (error) {
-      await safeScreenshot(page, 'test-results/steg9d-feil.png'); result.screenshots.push('steg9d-feil.png');
-      result.steg.push({ navn: 'Steg 9d: Forbedre prompt', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
-    }
+    } else { result.steg.push({ navn: 'Steg 9d: Forbedre prompt', status: 'HOPPET OVER', melding: 'Modal ikke åpen', tidBrukt: 0 }); }
 
     stegStart = Date.now();
-    try {
-      if (!isPageAlive(page)) throw new Error('Page lukket');
-      const imgBefore = await page.locator(`${SEL.imageDialog} img`).first().getAttribute('src').catch(() => '');
-      await expect(page.locator(SEL.generateAiBtn)).toBeVisible({ timeout: 5000 }); await page.locator(SEL.generateAiBtn).click();
-      console.log('   ⏳ Venter på AI-bildegenerering (maks 60s)...');
-      let elapsed = 0; let done = false;
-      while (!done && elapsed < 60000) {
-        if (!isPageAlive(page)) break;
-        await page.waitForTimeout(3000); elapsed += 3000; await collectToasts(page, logs);
-        const a = await page.locator(`${SEL.imageDialog} img`).first().getAttribute('src').catch(() => '');
-        if (a && a !== imgBefore && a.length > 20) { done = true; console.log(`   ✅ AI-bilde generert etter ${Math.round(elapsed/1000)}s`); }
+    if (modalOpen) {
+      try {
+        if (!isPageAlive(page)) throw new Error('Page lukket');
+        const imgBefore = await page.locator(`${SEL.imageDialog} img`).first().getAttribute('src').catch(() => '');
+        await expect(page.locator(SEL.generateAiBtn)).toBeVisible({ timeout: 5000 }); await page.locator(SEL.generateAiBtn).click();
+        console.log('   ⏳ Venter på AI-bildegenerering (maks 60s)...');
+        let elapsed = 0; let done = false;
+        while (!done && elapsed < 60000) {
+          if (!isPageAlive(page)) break;
+          await page.waitForTimeout(3000); elapsed += 3000; await collectToasts(page, logs);
+          const a = await page.locator(`${SEL.imageDialog} img`).first().getAttribute('src').catch(() => '');
+          if (a && a !== imgBefore && a.length > 20) { done = true; console.log(`   ✅ AI-bilde generert etter ${Math.round(elapsed/1000)}s`); }
+        }
+        await safeScreenshot(page, 'test-results/steg9e-ai-bilde.png'); result.screenshots.push('steg9e-ai-bilde.png');
+        result.steg.push({ navn: 'Steg 9e: Generer med AI', status: done ? 'OK' : 'FEILET', melding: done ? `Generert etter ${Math.round(elapsed/1000)}s` : 'Timeout etter 60s', tidBrukt: Date.now() - stegStart });
+      } catch (error) {
+        await safeScreenshot(page, 'test-results/steg9e-feil.png'); result.screenshots.push('steg9e-feil.png');
+        result.steg.push({ navn: 'Steg 9e: Generer med AI', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
       }
-      await safeScreenshot(page, 'test-results/steg9e-ai-bilde.png'); result.screenshots.push('steg9e-ai-bilde.png');
-      result.steg.push({ navn: 'Steg 9e: Generer med AI', status: done ? 'OK' : 'FEILET', melding: done ? `Generert etter ${Math.round(elapsed/1000)}s` : 'Timeout etter 60s', tidBrukt: Date.now() - stegStart });
-    } catch (error) {
-      await safeScreenshot(page, 'test-results/steg9e-feil.png'); result.screenshots.push('steg9e-feil.png');
-      result.steg.push({ navn: 'Steg 9e: Generer med AI', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
-    }
+    } else { result.steg.push({ navn: 'Steg 9e: Generer med AI', status: 'HOPPET OVER', melding: 'Modal ikke åpen', tidBrukt: 0 }); }
 
     stegStart = Date.now();
-    try {
-      if (!isPageAlive(page)) throw new Error('Page lukket');
-      await expect(page.locator(SEL.useImageBtn)).toBeVisible({ timeout: 10000 });
-      await page.locator(SEL.useImageBtn).click(); await page.waitForTimeout(3000); await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 9f: Bruk AI-bilde', status: 'OK', melding: 'AI-bilde valgt', tidBrukt: Date.now() - stegStart });
-    } catch (error) {
-      await safeScreenshot(page, 'test-results/steg9f-feil.png'); result.screenshots.push('steg9f-feil.png');
-      result.steg.push({ navn: 'Steg 9f: Bruk AI-bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
-    }
+    if (modalOpen) {
+      try {
+        if (!isPageAlive(page)) throw new Error('Page lukket');
+        await expect(page.locator(SEL.useImageBtn)).toBeVisible({ timeout: 10000 });
+        await page.locator(SEL.useImageBtn).click(); await page.waitForTimeout(3000); await collectToasts(page, logs);
+        result.steg.push({ navn: 'Steg 9f: Bruk AI-bilde', status: 'OK', melding: 'AI-bilde valgt', tidBrukt: Date.now() - stegStart });
+      } catch (error) {
+        await safeScreenshot(page, 'test-results/steg9f-feil.png'); result.screenshots.push('steg9f-feil.png');
+        result.steg.push({ navn: 'Steg 9f: Bruk AI-bilde', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
+      }
+    } else { result.steg.push({ navn: 'Steg 9f: Bruk AI-bilde', status: 'HOPPET OVER', melding: 'Modal ikke åpen', tidBrukt: 0 }); }
 
     stegStart = Date.now();
     try {
@@ -721,23 +746,8 @@ test.describe('Nettside.ai - Komplett test', () => {
     // ================================================================
     // BETALINGSTEST (steg 10) — crash-proof
     // ================================================================
-
-    try {
-      if (isPageAlive(page)) {
-        await page.keyboard.press('Escape').catch(() => {});
-        await page.waitForTimeout(1000).catch(() => {});
-      }
-    } catch {}
-
-    try {
-      if (isPageAlive(page)) {
-        const stillEditing = await page.locator(SEL.editorIframe).isVisible().catch(() => false);
-        if (stillEditing) {
-          await saveEditorChanges(page).catch(() => {});
-          await page.waitForTimeout(2000).catch(() => {});
-        }
-      }
-    } catch {}
+    try { if (isPageAlive(page)) { await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(1000).catch(() => {}); } } catch {}
+    try { if (isPageAlive(page)) { const stillEditing = await page.locator(SEL.editorIframe).isVisible().catch(() => false); if (stillEditing) { await saveEditorChanges(page).catch(() => {}); await page.waitForTimeout(2000).catch(() => {}); } } } catch {}
 
     // 10a: Klikk Publiser
     stegStart = Date.now();
@@ -745,14 +755,11 @@ test.describe('Nettside.ai - Komplett test', () => {
       if (!isPageAlive(page)) throw new Error('Page lukket');
       await expect(page.locator(SEL.publishButton)).toBeVisible({ timeout: 15000 });
       await page.locator(SEL.publishButton).click();
-      await page.waitForTimeout(2000);
-      await collectToasts(page, logs);
-      await safeScreenshot(page, 'test-results/steg10a-publiser-klikket.png');
-      result.screenshots.push('steg10a-publiser-klikket.png');
+      await page.waitForTimeout(2000); await collectToasts(page, logs);
+      await safeScreenshot(page, 'test-results/steg10a-publiser-klikket.png'); result.screenshots.push('steg10a-publiser-klikket.png');
       result.steg.push({ navn: 'Steg 10a: Klikk Publiser', status: 'OK', melding: 'Publiser-knapp klikket', tidBrukt: Date.now() - stegStart });
     } catch (error) {
-      await safeScreenshot(page, 'test-results/steg10a-feil.png');
-      result.screenshots.push('steg10a-feil.png');
+      await safeScreenshot(page, 'test-results/steg10a-feil.png'); result.screenshots.push('steg10a-feil.png');
       result.steg.push({ navn: 'Steg 10a: Klikk Publiser', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
@@ -764,12 +771,10 @@ test.describe('Nettside.ai - Komplett test', () => {
       await expect(pricingDialog).toBeVisible({ timeout: 10000 });
       const velgProBtn = pricingDialog.locator('button').filter({ hasText: 'Velg Pro' });
       await expect(velgProBtn).toBeVisible({ timeout: 5000 });
-      await safeScreenshot(page, 'test-results/steg10b-pristabellen.png');
-      result.screenshots.push('steg10b-pristabellen.png');
+      await safeScreenshot(page, 'test-results/steg10b-pristabellen.png'); result.screenshots.push('steg10b-pristabellen.png');
       result.steg.push({ navn: 'Steg 10b: Pristabellen vises', status: 'OK', melding: 'Dialog med Gratis/Pro/Premium synlig', tidBrukt: Date.now() - stegStart });
     } catch (error) {
-      await safeScreenshot(page, 'test-results/steg10b-feil.png');
-      result.screenshots.push('steg10b-feil.png');
+      await safeScreenshot(page, 'test-results/steg10b-feil.png'); result.screenshots.push('steg10b-feil.png');
       result.steg.push({ navn: 'Steg 10b: Pristabellen vises', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
@@ -781,22 +786,16 @@ test.describe('Nettside.ai - Komplett test', () => {
       const pricingDialog = page.locator('[role="dialog"]').filter({ hasText: 'Velg plan' });
       const velgProBtn = pricingDialog.locator('button').filter({ hasText: 'Velg Pro' });
       await expect(velgProBtn).toBeVisible({ timeout: 5000 });
-      const [newPage] = await Promise.all([
-        context.waitForEvent('page', { timeout: 30000 }),
-        velgProBtn.click(),
-      ]);
+      const [newPage] = await Promise.all([ context.waitForEvent('page', { timeout: 30000 }), velgProBtn.click() ]);
       stripePage = newPage;
       await stripePage.waitForLoadState('domcontentloaded', { timeout: 30000 });
       const stripeUrl = stripePage.url();
       console.log(`   🔗 Stripe URL: ${stripeUrl}`);
-      await safeScreenshot(page, 'test-results/steg10c-etter-klikk.png');
-      result.screenshots.push('steg10c-etter-klikk.png');
-      const isStripe = stripeUrl.includes('checkout.stripe.com');
-      if (!isStripe) throw new Error(`Forventet checkout.stripe.com, fikk: ${stripeUrl}`);
+      await safeScreenshot(page, 'test-results/steg10c-etter-klikk.png'); result.screenshots.push('steg10c-etter-klikk.png');
+      if (!stripeUrl.includes('checkout.stripe.com')) throw new Error(`Forventet checkout.stripe.com, fikk: ${stripeUrl}`);
       result.steg.push({ navn: 'Steg 10c: Velg Pro → Stripe', status: 'OK', melding: `Stripe checkout åpnet: ${stripeUrl.substring(0, 60)}...`, tidBrukt: Date.now() - stegStart });
     } catch (error) {
-      await safeScreenshot(page, 'test-results/steg10c-feil.png');
-      result.screenshots.push('steg10c-feil.png');
+      await safeScreenshot(page, 'test-results/steg10c-feil.png'); result.screenshots.push('steg10c-feil.png');
       result.steg.push({ navn: 'Steg 10c: Velg Pro → Stripe', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
     }
 
@@ -809,35 +808,26 @@ test.describe('Nettside.ai - Komplett test', () => {
       const hasSubscribeBtn = pageContent.includes('Abonner') || pageContent.includes('Subscribe');
       const hasProText = pageContent.includes('Pro') || pageContent.includes('pro');
       const hasNettside = pageContent.includes('Nettside') || pageContent.includes('nettside');
-      await stripePage.screenshot({ path: 'test-results/steg10d-stripe-checkout.png', fullPage: true }).catch(() => {});
-      result.screenshots.push('steg10d-stripe-checkout.png');
+      await stripePage.screenshot({ path: 'test-results/steg10d-stripe-checkout.png', fullPage: true }).catch(() => {}); result.screenshots.push('steg10d-stripe-checkout.png');
       const details: string[] = [];
       if (hasSubscribeBtn) details.push('Abonner-knapp');
       if (hasProText) details.push('Pro-plan');
       if (hasNettside) details.push('Nettside.ai');
       const success = hasSubscribeBtn && hasProText;
-      result.steg.push({
-        navn: 'Steg 10d: Verifiser Stripe checkout',
-        status: success ? 'OK' : 'FEILET',
-        melding: success ? `Stripe checkout OK: ${details.join(', ')}` : `Mangler innhold: Abonner=${hasSubscribeBtn}, Pro=${hasProText}`,
-        tidBrukt: Date.now() - stegStart
-      });
+      result.steg.push({ navn: 'Steg 10d: Verifiser Stripe checkout', status: success ? 'OK' : 'FEILET',
+        melding: success ? `Stripe checkout OK: ${details.join(', ')}` : `Mangler innhold: Abonner=${hasSubscribeBtn}, Pro=${hasProText}`, tidBrukt: Date.now() - stegStart });
       await stripePage.close().catch(() => {});
     } catch (error) {
-      if (stripePage) await stripePage.screenshot({ path: 'test-results/steg10d-feil.png' }).catch(() => {});
-      result.screenshots.push('steg10d-feil.png');
+      if (stripePage) await stripePage.screenshot({ path: 'test-results/steg10d-feil.png' }).catch(() => {}); result.screenshots.push('steg10d-feil.png');
       result.steg.push({ navn: 'Steg 10d: Verifiser Stripe checkout', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
       if (stripePage) await stripePage.close().catch(() => {});
     }
 
-    // ========================================
     // FERDIG - rapport genereres ALLTID
-    // ========================================
     result.sluttTid = new Date().toLocaleString('nb-NO', { timeZone: 'Europe/Oslo' });
     printReport(result);
     fs.mkdirSync('test-results', { recursive: true });
     fs.writeFileSync('test-results/rapport.json', JSON.stringify(result, null, 2));
-
     const kritiskeFeil = result.steg.filter(s => s.status === 'FEILET' && s.navn.includes('Steg 5'));
     if (kritiskeFeil.length > 0) throw new Error(`Kritiske steg feilet: ${kritiskeFeil.map(s => s.navn).join(', ')}`);
   });

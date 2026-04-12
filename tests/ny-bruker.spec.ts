@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.16 (steg 9e AI-bilde timeout økt fra 60s til 120s)
+// VERSION: 7.17 (steg 5b: kontrastsjekk kjøres på generert nettside, ikke app-UI)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -451,13 +451,27 @@ test.describe('Nettside.ai - Komplett test', () => {
     stegStart = Date.now();
     try {
       if (!isPageAlive(page)) throw new Error('Page lukket');
-      const axeResults = await new AxeBuilder({ page })
+      // Kjør kontrastsjekk på den genererte kundesiden inne i preview-iframen
+      await expect(page.locator(SEL.previewIframe)).toBeVisible({ timeout: 10000 });
+      const previewFrame = page.frame({ url: /about:srcdoc|kundesider/ }) 
+        || page.frames().find(f => f.url().includes('srcdoc') || f.url() === 'about:srcdoc')
+        || page.frames().find(f => f !== page.mainFrame());
+      if (!previewFrame) throw new Error('Preview-iframe ikke funnet');
+
+      // axe-core trenger en Page-lignende kontekst — vi åpner iframens HTML i en egen side
+      const iframeHtml = await previewFrame.content();
+      const kontrastPage = await page.context().newPage();
+      await kontrastPage.setContent(iframeHtml, { waitUntil: 'domcontentloaded' });
+      await kontrastPage.waitForTimeout(2000);
+
+      const axeResults = await new AxeBuilder({ page: kontrastPage })
         .withRules(['color-contrast'])
         .analyze();
+      await kontrastPage.close();
 
       const violations = axeResults.violations;
       if (violations.length === 0) {
-        result.steg.push({ navn: 'Steg 5b: WCAG kontrastsjekk', status: 'OK', melding: 'Alle elementer har tilstrekkelig kontrast (WCAG AA)', tidBrukt: Date.now() - stegStart });
+        result.steg.push({ navn: 'Steg 5b: WCAG kontrastsjekk (generert side)', status: 'OK', melding: 'Alle elementer på generert nettside har tilstrekkelig kontrast (WCAG AA)', tidBrukt: Date.now() - stegStart });
       } else {
         let totalNodes = 0;
         const details: string[] = [];
@@ -469,16 +483,15 @@ test.describe('Nettside.ai - Komplett test', () => {
             details.push(`${target}: ${msg}`);
           }
         }
-        // Skriv detaljer til fil for debugging
         fs.mkdirSync('test-results', { recursive: true });
         fs.writeFileSync('test-results/steg5b-kontrast-detaljer.json', JSON.stringify(violations, null, 2));
-        console.log(`   ⚠️ ${totalNodes} element(er) med kontrastfeil:`);
+        console.log(`   ⚠️ ${totalNodes} element(er) på generert side med kontrastfeil:`);
         for (const d of details.slice(0, 10)) console.log(`   - ${d}`);
         if (details.length > 10) console.log(`   ... og ${details.length - 10} til`);
 
         await safeScreenshot(page, 'test-results/steg5b-kontrast-feil.png', true);
         result.screenshots.push('steg5b-kontrast-feil.png');
-        result.steg.push({ navn: 'Steg 5b: WCAG kontrastsjekk', status: 'FEILET', melding: `${totalNodes} element(er) har utilstrekkelig kontrast. Se steg5b-kontrast-detaljer.json`, tidBrukt: Date.now() - stegStart });
+        result.steg.push({ navn: 'Steg 5b: WCAG kontrastsjekk (generert side)', status: 'FEILET', melding: `${totalNodes} element(er) på generert nettside har utilstrekkelig kontrast. Se steg5b-kontrast-detaljer.json`, tidBrukt: Date.now() - stegStart });
       }
     } catch (error) {
       await safeScreenshot(page, 'test-results/steg5b-feil.png'); result.screenshots.push('steg5b-feil.png');

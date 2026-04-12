@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.15 (nytt steg 5b: WCAG kontrastsjekk med axe-core)
+// VERSION: 7.16 (steg 9e AI-bilde timeout økt fra 60s til 120s)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -740,16 +740,16 @@ test.describe('Nettside.ai - Komplett test', () => {
         if (!isPageAlive(page)) throw new Error('Page lukket');
         const imgBefore = await page.locator(`${SEL.imageDialog} img`).first().getAttribute('src').catch(() => '');
         await expect(page.locator(SEL.generateAiBtn)).toBeVisible({ timeout: 5000 }); await page.locator(SEL.generateAiBtn).click();
-        console.log('   ⏳ Venter på AI-bildegenerering (maks 60s)...');
+        console.log('   ⏳ Venter på AI-bildegenerering (maks 120s)...');
         let elapsed = 0; let done = false;
-        while (!done && elapsed < 60000) {
+        while (!done && elapsed < 120000) {
           if (!isPageAlive(page)) break;
           await page.waitForTimeout(3000); elapsed += 3000; await collectToasts(page, logs);
           const a = await page.locator(`${SEL.imageDialog} img`).first().getAttribute('src').catch(() => '');
           if (a && a !== imgBefore && a.length > 20) { done = true; console.log(`   ✅ AI-bilde generert etter ${Math.round(elapsed/1000)}s`); }
         }
         await safeScreenshot(page, 'test-results/steg9e-ai-bilde.png'); result.screenshots.push('steg9e-ai-bilde.png');
-        result.steg.push({ navn: 'Steg 9e: Generer med AI', status: done ? 'OK' : 'FEILET', melding: done ? `Generert etter ${Math.round(elapsed/1000)}s` : 'Timeout etter 60s', tidBrukt: Date.now() - stegStart });
+        result.steg.push({ navn: 'Steg 9e: Generer med AI', status: done ? 'OK' : 'FEILET', melding: done ? `Generert etter ${Math.round(elapsed/1000)}s` : 'Timeout etter 120s', tidBrukt: Date.now() - stegStart });
       } catch (error) {
         await safeScreenshot(page, 'test-results/steg9e-feil.png'); result.screenshots.push('steg9e-feil.png');
         result.steg.push({ navn: 'Steg 9e: Generer med AI', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });

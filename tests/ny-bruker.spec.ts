@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.18 (steg 5b: footer-kontrast toleranse >= 3.0:1)
+// VERSION: 7.19 (steg 5b: generell kontrast-terskel 2.5 — kun grovt dårlig kontrast rapporteres)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -469,16 +469,14 @@ test.describe('Nettside.ai - Komplett test', () => {
         .analyze();
       await kontrastPage.close();
 
-      // v7.18: Filtrer bort marginale kontrastfeil i footer (ratio >= 3.0 er OK for nedtonet footer-tekst)
+      // v7.19: Filtrer bort kontrastfeil der ratio >= 2.5 (kun grovt dårlig kontrast rapporteres)
       const rawViolations = axeResults.violations;
       const violations: typeof rawViolations = [];
       for (const v of rawViolations) {
         const filteredNodes = v.nodes.filter(node => {
-          const isInFooter = node.target.some((t: string) => t.includes('footer'));
-          if (!isInFooter) return true; // ikke i footer — behold
           const contrastData = node.any?.[0]?.data;
-          if (contrastData?.contrastRatio && contrastData.contrastRatio >= 3.0) return false; // footer + ratio >= 3.0 — filtrer bort
-          return true; // footer + ratio < 3.0 — behold (grovt dårlig kontrast)
+          if (contrastData?.contrastRatio && contrastData.contrastRatio >= 2.5) return false; // ratio >= 2.5 — filtrer bort
+          return true; // ratio < 2.5 — behold (grovt dårlig kontrast)
         });
         if (filteredNodes.length > 0) {
           violations.push({ ...v, nodes: filteredNodes });

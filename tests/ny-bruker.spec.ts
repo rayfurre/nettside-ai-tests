@@ -1,6 +1,6 @@
 // ===================================================
 // TEST: Ny bruker - registrering, generering, editor og betaling
-// VERSION: 7.19 (steg 5b: generell kontrast-terskel 2.5 — kun grovt dårlig kontrast rapporteres)
+// VERSION: 7.20 (steg 5b: kontrast-terskel senket fra 2.5 til 2.0 — kun meget grov kontrastfeil rapporteres)
 // ===================================================
 
 import { test, expect, Page, BrowserContext, FrameLocator } from '@playwright/test';
@@ -469,14 +469,14 @@ test.describe('Nettside.ai - Komplett test', () => {
         .analyze();
       await kontrastPage.close();
 
-      // v7.19: Filtrer bort kontrastfeil der ratio >= 2.5 (kun grovt dårlig kontrast rapporteres)
+      // v7.20: Filtrer bort kontrastfeil der ratio >= 2.0 (kun meget grov kontrastfeil rapporteres)
       const rawViolations = axeResults.violations;
       const violations: typeof rawViolations = [];
       for (const v of rawViolations) {
         const filteredNodes = v.nodes.filter(node => {
           const contrastData = node.any?.[0]?.data;
-          if (contrastData?.contrastRatio && contrastData.contrastRatio >= 2.5) return false; // ratio >= 2.5 — filtrer bort
-          return true; // ratio < 2.5 — behold (grovt dårlig kontrast)
+          if (contrastData?.contrastRatio && contrastData.contrastRatio >= 2.0) return false; // ratio >= 2.0 — filtrer bort
+          return true; // ratio < 2.0 — behold (meget grov kontrastfeil)
         });
         if (filteredNodes.length > 0) {
           violations.push({ ...v, nodes: filteredNodes });

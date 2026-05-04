@@ -10,7 +10,7 @@ name: Daglig E2E Test - Nettside.ai
 
 on:
   schedule:
-    - cron: '0 5 * * *'
+    - cron: '0 4 */4 * *'
   workflow_dispatch:
 
 jobs:

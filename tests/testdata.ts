@@ -10,6 +10,7 @@ export interface TestBedrift {
   etternavn: string;
   epostPrefix: string;
   epostDomene: string;
+  telefon: string;
   passord: string;
 }
 
@@ -21,6 +22,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Hansen",
     epostPrefix: "hans",
     epostDomene: "hansens-rorlegger.no",
+    telefon: "90000001",
     passord: "TestPassord123!"
   },
   {
@@ -30,6 +32,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Kristiansen",
     epostPrefix: "linda",
     epostDomene: "klippogkruller.no",
+    telefon: "90000002",
     passord: "TestPassord123!"
   },
   {
@@ -39,6 +42,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Rossi",
     epostPrefix: "marco",
     epostDomene: "pizzeria-napoli.no",
+    telefon: "90000003",
     passord: "TestPassord123!"
   },
   {
@@ -48,6 +52,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Johansen",
     epostPrefix: "kari",
     epostDomene: "renogskinn.no",
+    telefon: "90000004",
     passord: "TestPassord123!"
   },
   {
@@ -57,6 +62,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Bjørnsen",
     epostPrefix: "ole",
     epostDomene: "bjornsen-elektro.no",
+    telefon: "90000005",
     passord: "TestPassord123!"
   },
   {
@@ -66,6 +72,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Solberg",
     epostPrefix: "ingrid",
     epostDomene: "solsikkenblomster.no",
+    telefon: "90000006",
     passord: "TestPassord123!"
   },
   {
@@ -75,6 +82,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Møllerstad",
     epostPrefix: "erik",
     epostDomene: "kaffebrenneriet-molla.no",
+    telefon: "90000007",
     passord: "TestPassord123!"
   },
   {
@@ -84,6 +92,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Nordmann",
     epostPrefix: "silje",
     epostDomene: "aktivfysioterapi.no",
+    telefon: "90000008",
     passord: "TestPassord123!"
   },
   {
@@ -93,6 +102,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Bilstad",
     epostPrefix: "terje",
     epostDomene: "bildoktoren.no",
+    telefon: "90000009",
     passord: "TestPassord123!"
   },
   {
@@ -102,6 +112,7 @@ export const testBedrifter: TestBedrift[] = [
     etternavn: "Lund",
     epostPrefix: "marte",
     epostDomene: "advokatlund.no",
+    telefon: "90000010",
     passord: "TestPassord123!"
   }
 ];

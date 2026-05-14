@@ -380,10 +380,11 @@ test.describe('Nettside.ai - Komplett test', () => {
       await page.getByPlaceholder(/Beskriv hva bedriften gjør/i).fill(bedrift.forretningside);
       await page.getByPlaceholder('Fornavn').fill(bedrift.fornavn);
       await page.getByPlaceholder('Etternavn').fill(bedrift.etternavn);
+      await page.getByPlaceholder('+47 XXX XX XXX').fill(bedrift.telefon);
       await page.getByPlaceholder('din@epost.no').fill(unikEpost);
       await page.getByPlaceholder('Minst 6 tegn').fill(bedrift.passord);
       await collectToasts(page, logs);
-      result.steg.push({ navn: 'Steg 2: Fyll ut skjema', status: 'OK', melding: 'Alle 6 felter utfylt', tidBrukt: Date.now() - stegStart });
+      result.steg.push({ navn: 'Steg 2: Fyll ut skjema', status: 'OK', melding: 'Alle 7 felter utfylt', tidBrukt: Date.now() - stegStart });
     } catch (error) {
       await safeScreenshot(page, 'test-results/steg2-feil.png'); result.screenshots.push('steg2-feil.png');
       result.steg.push({ navn: 'Steg 2: Fyll ut skjema', status: 'FEILET', melding: `${error}`, tidBrukt: Date.now() - stegStart });
